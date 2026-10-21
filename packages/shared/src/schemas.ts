@@ -153,6 +153,12 @@ const cardFields = {
   nickname: optText(64),
   /** Full card number. Encrypted at rest; only BIN + last 4 are stored in clear. */
   pan: z.string().max(32).nullish(),
+  /** Security code: CVV/CVN (3–4 digits) or a 6-digit PIN. Encrypted; null/"" forgets it, omitted keeps it. */
+  cvv: z
+    .string()
+    .trim()
+    .regex(/^(\d{3}|\d{4}|\d{6}|)$/, '3, 4 or 6 digits')
+    .nullish(),
   bin: z.string().regex(/^\d{6}$/, '6 digits').nullish(),
   /** Public BIN record looked up by the browser when the card was entered. */
   binInfo: z
@@ -256,6 +262,8 @@ export const transactionSchema = z.discriminatedUnion('type', [
     toCurrency: currencyCodeSchema.nullish(),
     /** Amount leaving the source account (source currency). */
     amount: positiveMinorSchema,
+    /** Fee charged on top by the source account (source currency), booked as an expense. */
+    fee: positiveMinorSchema.nullish(),
     /**
      * Amount arriving (destination currency). For a cross-currency transfer left out, it is
      * converted with the current FX rates.

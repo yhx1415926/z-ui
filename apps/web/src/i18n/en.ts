@@ -192,6 +192,11 @@ const en: Dict = {
     beforeBalanceDate: 'On or before the balance date: already included in the synced balance, not counted',
   },
   card: {
+    cvv: 'Security code (CVV/CVN/PIN)',
+    cvvHint: '3, 4 or 6 digits',
+    cvvKept: 'Saved — leave blank to keep',
+    forgetCvv: 'Delete the saved code',
+    cvvHelp: 'Encrypted; fetched only when you turn the card over while signed in (verification required)',
     title: 'Cards',
     add: 'Add card',
     edit: 'Edit card',
@@ -240,6 +245,11 @@ const en: Dict = {
     addToAccount: 'Add card',
   },
   tx: {
+    fee: 'Fee ({{currency}})',
+    feeHint: 'Charged on top by the source account, booked as its own "transfer fee" expense (counted in the statistics)',
+    feeShort: 'Fee {{amount}}',
+    fxLoss: 'FX loss {{amount}} ({{pct}}%)',
+    fxGain: 'FX gain {{amount}} ({{pct}}%)',
     foreign: 'Foreign-currency charge (e.g. USD paid from a CNY wallet)',
     originalAmount: 'Charged (original currency)',
     paidAmount: 'Actually paid ({{currency}})',
@@ -669,6 +679,8 @@ const en: Dict = {
     network: 'Network error',
     generic: 'Something went wrong',
     codes: {
+      NO_CVV: 'No security code saved for this card',
+      AMOUNT_MISMATCH: 'A same-currency transfer sends and receives the same amount — enter fees in the Fee field',
       AMOUNT_REQUIRED: 'No exchange rate: enter the amount, or sync the rates first',
       TO_AMOUNT_REQUIRED: 'No exchange rate: enter the received amount, or sync the rates first',
       AUTOPAY_SAME_ACCOUNT: 'Autopay must come from another account than the card’s own',

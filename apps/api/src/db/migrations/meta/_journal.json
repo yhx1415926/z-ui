@@ -36,6 +36,13 @@
       "when": 1792592270908,
       "tag": "0004_autopay_notify_watchlist",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1792596609268,
+      "tag": "0005_cvv_fee_market_rate",
+      "breakpoints": true
     }
   ]
 }

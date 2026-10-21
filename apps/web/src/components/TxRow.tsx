@@ -3,7 +3,7 @@ import { Tag } from 'antd';
 import { useTranslation } from 'react-i18next';
 import type { TransactionDto } from '@z-ui/shared';
 import { colorFor, useLookups } from '../lib/format.ts';
-import { MoneyText, OriginalAmount } from './Money.tsx';
+import { MoneyText, TxExtras } from './Money.tsx';
 
 /** Compact transaction line used on the dashboard and in account details. */
 export function TxRow({ tx, onClick }: { tx: TransactionDto; onClick?: () => void }) {
@@ -31,7 +31,7 @@ export function TxRow({ tx, onClick }: { tx: TransactionDto; onClick?: () => voi
       </div>
       <div style={{ textAlign: 'right' }}>
         <MoneyText minor={tx.amount} currency={tx.currency} signed colored style={{ fontWeight: 600 }} />
-        <OriginalAmount tx={tx} />
+        <TxExtras tx={tx} />
         <div>
           {tx.tagIds.slice(0, 2).map((id) => (
             <Tag key={id} style={{ marginInlineEnd: 0, marginInlineStart: 4, fontSize: 11 }} color={L.tag.get(id)?.color ?? undefined}>

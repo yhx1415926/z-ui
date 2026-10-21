@@ -5,6 +5,7 @@ import { z } from 'zod';
 import {
   addDays,
   billPatchSchema,
+  pairRate,
   billSchema,
   isoDateSchema,
   nextOccurrence,
@@ -21,7 +22,7 @@ import { chunkIds, chunkRows, inChunks } from '../lib/chunks.ts';
 import { body, fail, notFound, query } from '../lib/http.ts';
 import { newId } from '../lib/id.ts';
 import { assertCurrency, currenciesOf, defined, ownAccount, ownCard, ownCategory, runBatch } from '../lib/ledger.ts';
-import { convertNow } from './fx.ts';
+import { convertNow, ratesMap } from './fx.ts';
 import { insertLegOps, legRows, toDtos } from './transactions.ts';
 
 type BillRow = typeof bills.$inferSelect;
@@ -177,10 +178,10 @@ function paymentOps(
   userId: string,
   b: BillRow,
   o: OccRow,
-  p: { account: AccountRow; card: CardRow | null; currency: string; amount: number; occurredAt: string; note?: string | null },
+  p: { account: AccountRow; card: CardRow | null; currency: string; amount: number; occurredAt: string; note?: string | null; marketRate?: number | null },
 ) {
-  // Paid in another currency than billed: remember what was billed.
-  const original = p.currency !== b.currency ? { originalAmount: o.amount, originalCurrency: b.currency } : {};
+  // Paid in another currency than billed: remember what was billed (and the market rate then).
+  const original = p.currency !== b.currency ? { originalAmount: o.amount, originalCurrency: b.currency, marketRate: p.marketRate ?? null } : {};
   const t = deps.now();
   const { rows, ops } = insertLegOps(
     deps.db,
@@ -409,13 +410,20 @@ export const billRoutes = new Hono<AppBindings>()
     const currency = input.currency ?? (held.includes(b.currency) ? b.currency : account.currency);
     if (!held.includes(currency)) fail(400, `${account.name} does not hold ${currency}`, 'CURRENCY_NOT_HELD');
     // Charged in another currency and the amount left blank: convert at the current rate.
-    const amount = input.amount ?? (currency === b.currency ? o.amount : await convertNow(deps, o.amount, b.currency, currency, 'AMOUNT_REQUIRED'));
+    let amount = input.amount ?? (currency === b.currency ? o.amount : null);
+    let marketRate: number | null = null;
+    if (currency !== b.currency) {
+      const rates = await ratesMap(deps.db);
+      marketRate = pairRate((x) => rates.get(x), b.currency, currency);
+      amount ??= await convertNow(deps, o.amount, b.currency, currency, 'AMOUNT_REQUIRED', rates);
+    }
     const t = today(deps);
     const { rows, ops } = paymentOps(deps, userId, b, o, {
       account,
       card,
       currency,
-      amount,
+      marketRate,
+      amount: amount!,
       occurredAt: input.occurredAt ?? (o.dueDate < t ? o.dueDate : t),
       note: input.note,
     });

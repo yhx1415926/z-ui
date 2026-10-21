@@ -34,6 +34,19 @@ const SAMPLE: Record<NotifyKind, Record<string, string | number>> = {
   card_expiry: { card: '中行 Mastercard', expiry: '12/2026', daysLeft: 30 },
 };
 
+/** Comparable form of the settings: sorted keys, trimmed strings (the server trims them). */
+function canon(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(canon);
+  if (v && typeof v === 'object') {
+    return Object.fromEntries(
+      Object.keys(v)
+        .sort()
+        .map((k) => [k, canon((v as Record<string, unknown>)[k])]),
+    );
+  }
+  return typeof v === 'string' ? v.trim() : v;
+}
+
 function TemplateEditor({ kind, appName }: { kind: NotifyKind; appName: string }) {
   const { t } = useTranslation();
   const form = Form.useFormInstance();
@@ -103,7 +116,8 @@ export function NotifyPage() {
   const test = useAction(() => post('/notify/test'), { success: t('notify.testSent'), invalidate: ['notify'] });
   const run = useAction(() => post<NotifyRunDto>('/notify/run'), { success: false, invalidate: ['notify', 'statements', 'reminders', 'accounts', 'dashboard'] });
 
-  const dirty = () => form.isFieldsTouched();
+  // Unsaved = the form differs from what the server has (touched fields don't count once saved).
+  const dirty = () => !!data && JSON.stringify(canon(form.getFieldsValue(true))) !== JSON.stringify(canon(data.settings));
   const log = data?.log ?? [];
 
   return (

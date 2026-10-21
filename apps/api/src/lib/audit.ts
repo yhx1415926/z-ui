@@ -21,6 +21,7 @@ export type AuditAction =
   | 'invite.accept'
   | 'user.update'
   | 'card.reveal'
+  | 'card.reveal_cvv'
   | 'config.save';
 
 export async function audit(

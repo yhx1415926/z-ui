@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { BRAND_META, currencyDecimals, formatMoney, type AccountDto, type CardDto, type FormatMoneyOptions } from '@z-ui/shared';
+import { BRAND_META, currencyDecimals, formatMoney, fxLoss, pairRate, type AccountDto, type CardDto, type FormatMoneyOptions } from '@z-ui/shared';
 import { useAccounts, useCards, useCategories, useConfig, useFx, useInstitutions, useTags } from '../api/hooks.ts';
 
 export function useLocale() {
@@ -30,6 +30,31 @@ export function useFxConvert() {
       return Math.round((minor / 10 ** decimals(from) / a) * b * 10 ** decimals(to));
     },
     [data, decimals],
+  );
+}
+
+/** Market rate between two currencies from the synced rates: units of `to` per 1 `from`. */
+export function useFxRate() {
+  const { data } = useFx();
+  return useCallback((from: string, to: string) => pairRate((c) => data?.rates.find((r) => r.currency === c)?.perUsd, from, to), [data]);
+}
+
+/**
+ * "汇损 ¥1.20 (0.83%)" / "汇兑收益 …" for an exchange of `a` (currency A) into `b` (currency B)
+ * against the market `rate` (B per 1 A); null when there is no rate or no difference.
+ */
+export function useFxLossText() {
+  const { t } = useTranslation();
+  const decimals = useDecimals();
+  const money = useMoney();
+  return useCallback(
+    (p: { a: number; aCurrency: string; b: number; bCurrency: string; rate: number | null | undefined; paying: boolean }) => {
+      if (!p.rate || p.aCurrency === p.bCurrency) return null;
+      const r = fxLoss({ a: p.a, aDecimals: decimals(p.aCurrency), b: p.b, bDecimals: decimals(p.bCurrency), rate: p.rate, paying: p.paying });
+      if (!r || Math.abs(r.loss) < 1) return null;
+      return t(r.loss > 0 ? 'tx.fxLoss' : 'tx.fxGain', { amount: money(Math.abs(r.loss), p.bCurrency), pct: Math.abs(r.pct).toFixed(2) });
+    },
+    [t, decimals, money],
   );
 }
 

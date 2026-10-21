@@ -242,6 +242,11 @@ export const cards = sqliteTable(
     last4: text('last4').notNull(),
     /** AES-256-GCM encrypted full card number (lib/crypto.ts). Never returned by list APIs. */
     panEnc: text('pan_enc'),
+    /**
+     * Encrypted security code: CVV/CVN (3–4 digits) or a 6-digit PIN, not told apart. Only sent
+     * to the browser by POST /cards/:id/cvv (signed in, recently verified, card turned over).
+     */
+    cvvEnc: text('cvv_enc'),
     expMonth: integer('exp_month'),
     expYear: integer('exp_year'),
     holderName: text('holder_name'),
@@ -328,6 +333,13 @@ export const transactions = sqliteTable(
      */
     originalAmount: integer('original_amount'),
     originalCurrency: text('original_currency'),
+    /**
+     * Synced FX rate when recorded, for the exchange loss: units of the transfer's destination
+     * (or the booked) currency per 1 unit of its source (or the original) currency.
+     */
+    marketRate: real('market_rate'),
+    /** Fee expense of a transfer: the transfer's group id (the fee leaves the source account). */
+    feeOf: text('fee_of'),
     extra: json('extra'),
     createdAt: ts('created_at'),
     updatedAt: ts('updated_at'),
@@ -337,6 +349,7 @@ export const transactions = sqliteTable(
     index('tx_account_idx').on(t.accountId, t.currency),
     index('tx_group_idx').on(t.transferGroupId),
     index('tx_statement_idx').on(t.statementId),
+    index('tx_fee_of_idx').on(t.feeOf),
   ],
 );
 

@@ -1,6 +1,6 @@
 import { and, eq, gte, inArray, isNotNull, isNull, lte } from 'drizzle-orm';
 import type { BatchItem } from 'drizzle-orm/batch';
-import { addDays, currencyDecimals, maskPan, type StatementDto } from '@z-ui/shared';
+import { addDays, currencyDecimals, maskPan, pairRate, type StatementDto } from '@z-ui/shared';
 import { accountCurrencies, accounts, cards, creditStatements, institutions, transactions } from '../db/schema.ts';
 import type { Deps } from '../env.ts';
 import { today } from '../routes/bills.ts';
@@ -34,6 +34,8 @@ export interface AutopayPlan {
   amount: number;
   /** The account's current balance in `currency`. */
   balance: number;
+  /** Statement currency per 1 unit of `currency` (cross-currency repayments). */
+  marketRate: number | null;
 }
 
 export const cardName = (c: Pick<CardRow, 'nickname' | 'last4'>) => c.nickname ?? maskPan(c.last4);
@@ -103,6 +105,7 @@ export async function autopayPlans(deps: Deps, userId: string, dueBy: string): P
       needed,
       amount,
       balance: mine.find((h) => h.currency === currency)?.balance ?? 0,
+      marketRate: currency === st.currency ? null : pairRate((x) => rates.get(x), currency, st.currency),
     };
   });
 }
@@ -125,7 +128,7 @@ export async function runAutopay(deps: Deps, userId: string): Promise<AutopayDon
     ];
     let transactionId = '';
     if (p.amount > 0) {
-      const common = { cardId: null, categoryId: null, counterparty: null, note: '自动还款', extra: {}, occurredAt: st.dueDate, type: 'transfer' as const };
+      const common = { cardId: null, categoryId: null, counterparty: null, note: '自动还款', extra: {}, occurredAt: st.dueDate, type: 'transfer' as const, marketRate: p.marketRate };
       const rows = legRows(
         userId,
         [

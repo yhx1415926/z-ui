@@ -3,6 +3,7 @@ import type { BatchItem } from 'drizzle-orm/batch';
 import { Hono, type Context } from 'hono';
 import {
   HIDDEN_TAG,
+  pairRate,
   transactionQuerySchema,
   transactionSchema,
   type CurrencySums,
@@ -10,59 +11,99 @@ import {
   type TransactionInput,
 } from '@z-ui/shared';
 import type { DB } from '../db/client.ts';
-import { accounts, billOccurrences, tags, transactions, transactionTags } from '../db/schema.ts';
+import { accounts, billOccurrences, categories, tags, transactions, transactionTags } from '../db/schema.ts';
 import type { AppBindings } from '../env.ts';
 import { pairsOf, recalcOps } from '../lib/balances.ts';
 import { inChunks } from '../lib/chunks.ts';
 import { body, fail, notFound, query } from '../lib/http.ts';
 import { newId } from '../lib/id.ts';
 import { accountCurrency, applyExtra, assertCurrency, assertOwnTags, ownAccount, ownCard, ownCategory, runBatch } from '../lib/ledger.ts';
-import { convertNow } from './fx.ts';
+import { convertNow, ratesMap } from './fx.ts';
 
 export type TxRow = typeof transactions.$inferSelect;
 type C = Context<AppBindings>;
 
 /** Row content derived from a request, before ids/timestamps are attached. */
+/**
+ * Row content derived from a request, before ids/timestamps are attached. A transfer is a
+ * from + to leg sharing a group id, plus an optional fee leg: an expense in the source account
+ * that points at the group (fee_of), so the fee counts as spending in the statistics.
+ */
 type Leg = Pick<TxRow, 'accountId' | 'cardId' | 'type' | 'amount' | 'currency' | 'occurredAt' | 'categoryId' | 'counterparty' | 'note' | 'extra'> &
-  Partial<Pick<TxRow, 'originalAmount' | 'originalCurrency'>> & {
-    role: 'main' | 'from' | 'to';
+  Partial<Pick<TxRow, 'originalAmount' | 'originalCurrency' | 'marketRate'>> & {
+    role: 'main' | 'from' | 'to' | 'fee';
   };
 
 export async function toDtos(db: DB, userId: string, rows: TxRow[]): Promise<TransactionDto[]> {
   if (rows.length === 0) return [];
   const ids = rows.map((r) => r.id);
-  const groups = [...new Set(rows.map((r) => r.transferGroupId).filter((g): g is string => !!g))];
-  const [tagRows, legRows] = await Promise.all([
+  const groups = [...new Set(rows.map((r) => r.transferGroupId ?? r.feeOf).filter((g): g is string => !!g))];
+  const [tagRows, related] = await Promise.all([
     inChunks(ids, (part) => db.select().from(transactionTags).where(inArray(transactionTags.transactionId, part))),
     inChunks(groups, (part) =>
       db
-        .select({ id: transactions.id, g: transactions.transferGroupId, accountId: transactions.accountId, amount: transactions.amount, currency: transactions.currency })
+        .select({
+          id: transactions.id,
+          g: transactions.transferGroupId,
+          feeOf: transactions.feeOf,
+          accountId: transactions.accountId,
+          amount: transactions.amount,
+          currency: transactions.currency,
+        })
         .from(transactions)
-        .where(and(eq(transactions.userId, userId), inArray(transactions.transferGroupId, part))),
+        .where(and(eq(transactions.userId, userId), or(inArray(transactions.transferGroupId, part), inArray(transactions.feeOf, part)))),
+      40,
     ),
   ]);
   const tagsOf = new Map<string, string[]>();
   for (const t of tagRows) tagsOf.set(t.transactionId, [...(tagsOf.get(t.transactionId) ?? []), t.tagId]);
   return rows.map((r) => {
-    const other = r.transferGroupId ? legRows.find((l) => l.g === r.transferGroupId && l.id !== r.id) : undefined;
+    const group = r.transferGroupId;
+    const other = group ? related.find((l) => l.g === group && l.id !== r.id) : undefined;
+    const fee = group ? related.find((l) => l.feeOf === group) : undefined;
+    const parent = r.feeOf ? related.find((l) => l.g === r.feeOf && l.amount < 0) : undefined;
     const { userId: _u, ...rest } = r;
     return {
       ...rest,
       counterpartAccountId: other?.accountId ?? null,
       counterpartAmount: other?.amount ?? null,
       counterpartCurrency: other?.currency ?? null,
+      fee: fee ? -fee.amount : null,
+      feeCurrency: fee?.currency ?? null,
+      feeParentId: parent?.id ?? null,
       tagIds: tagsOf.get(r.id) ?? [],
     };
   });
 }
 
-/** Validate a request against the user's accounts/cards/categories and turn it into legs. */
-export async function planLegs(c: C, input: TransactionInput, storedExtra: Record<string, unknown>): Promise<Leg[]> {
+/** The user's expense category for fees ("银行手续费"), if there is one. */
+async function feeCategory(db: DB, userId: string): Promise<string | null> {
+  const [cat] = await db
+    .select({ id: categories.id })
+    .from(categories)
+    .where(and(eq(categories.userId, userId), eq(categories.kind, 'expense'), eq(categories.archived, false), sql`${categories.name} like '%手续费%'`))
+    .orderBy(categories.sort)
+    .limit(1);
+  return cat?.id ?? null;
+}
+
+/**
+ * Validate a request against the user's accounts/cards/categories and turn it into legs.
+ * `prev` = the legs being edited: an exchange keeps the market rate it was recorded with while
+ * its currencies stay the same (so editing a note never re-rates an old transfer).
+ */
+export async function planLegs(c: C, input: TransactionInput, storedExtra: Record<string, unknown>, prev: TxRow[] = []): Promise<Leg[]> {
   const { db } = c.var.deps;
   const userId = c.var.user.id;
   const extra = applyExtra(c.var.deps, 'transaction', storedExtra, input.extra);
   // Set explicitly so an edit that drops the foreign amount clears it.
-  const common = { occurredAt: input.occurredAt, note: input.note ?? null, counterparty: input.counterparty ?? null, extra, originalAmount: null, originalCurrency: null };
+  const common = { occurredAt: input.occurredAt, note: input.note ?? null, counterparty: input.counterparty ?? null, extra, originalAmount: null, originalCurrency: null, marketRate: null };
+  /** Market rate (B per 1 A) for an exchange: the stored one when editing the same pair, else the current one. */
+  const rateFor = async (a: string, b: string, kept: TxRow | undefined, samePair: boolean) => {
+    if (kept && samePair) return { rate: kept.marketRate, rates: undefined };
+    const rates = await ratesMap(db);
+    return { rate: pairRate((x) => rates.get(x), a, b), rates };
+  };
 
   if (input.type === 'transfer') {
     const from = await ownAccount(db, userId, input.fromAccountId);
@@ -72,20 +113,39 @@ export async function planLegs(c: C, input: TransactionInput, storedExtra: Recor
     // Same account is allowed when exchanging between two of its currencies.
     if (from.id === to.id && fromCurrency === toCurrency) fail(400, 'cannot transfer to the same account and currency', 'SAME_ACCOUNT');
     let toAmount = input.toAmount ?? null;
+    let marketRate: number | null = null;
     if (fromCurrency === toCurrency) {
       if (toAmount !== null && toAmount !== input.amount) {
-        fail(400, 'same-currency transfers must have equal amounts (record fees separately)', 'AMOUNT_MISMATCH');
+        fail(400, 'same-currency transfers must have equal amounts (enter the fee separately)', 'AMOUNT_MISMATCH');
       }
       toAmount = input.amount;
-    } else if (toAmount === null) {
+    } else {
+      const prevFrom = prev.find((l) => l.type === 'transfer' && l.amount < 0);
+      const prevTo = prev.find((l) => l.type === 'transfer' && l.amount >= 0);
+      const r = await rateFor(fromCurrency, toCurrency, prevFrom, prevFrom?.currency === fromCurrency && prevTo?.currency === toCurrency);
+      marketRate = r.rate;
       // Left blank: what arrives at the current rate.
-      toAmount = await convertNow(c.var.deps, input.amount, fromCurrency, toCurrency, 'TO_AMOUNT_REQUIRED');
+      toAmount ??= await convertNow(c.var.deps, input.amount, fromCurrency, toCurrency, 'TO_AMOUNT_REQUIRED', r.rates);
     }
     const categoryId = input.categoryId ? (await ownCategory(db, userId, input.categoryId)).id : null;
-    return [
-      { ...common, role: 'from', type: 'transfer', accountId: from.id, currency: fromCurrency, cardId: null, categoryId, amount: -input.amount },
-      { ...common, role: 'to', type: 'transfer', accountId: to.id, currency: toCurrency, cardId: null, categoryId, amount: toAmount },
+    const legs: Leg[] = [
+      { ...common, marketRate, role: 'from', type: 'transfer', accountId: from.id, currency: fromCurrency, cardId: null, categoryId, amount: -input.amount },
+      { ...common, marketRate, role: 'to', type: 'transfer', accountId: to.id, currency: toCurrency, cardId: null, categoryId, amount: toAmount },
     ];
+    if (input.fee) {
+      legs.push({
+        ...common,
+        role: 'fee',
+        type: 'expense',
+        accountId: from.id,
+        currency: fromCurrency,
+        cardId: null,
+        categoryId: await feeCategory(db, userId),
+        counterparty: '转账手续费',
+        amount: -input.fee,
+      });
+    }
+    return legs;
   }
 
   const acc = await ownAccount(db, userId, input.accountId);
@@ -108,13 +168,15 @@ export async function planLegs(c: C, input: TransactionInput, storedExtra: Recor
   // A charge in another currency (e.g. USD paid from a CNY-only wallet): keep what the merchant
   // billed; the account's own amount is what was actually paid, or the current-rate conversion.
   let paid = input.amount ?? null;
-  let original: { originalAmount: number; originalCurrency: string } | null = null;
+  let original: { originalAmount: number; originalCurrency: string; marketRate: number | null } | null = null;
   if (input.originalCurrency && input.originalAmount) {
     if (input.originalCurrency === currency) paid ??= input.originalAmount;
     else {
       assertCurrency(c.var.deps, input.originalCurrency);
-      original = { originalAmount: input.originalAmount, originalCurrency: input.originalCurrency };
-      paid ??= await convertNow(c.var.deps, input.originalAmount, input.originalCurrency, currency, 'AMOUNT_REQUIRED');
+      const kept = prev.find((l) => l.type === input.type && !l.feeOf);
+      const r = await rateFor(input.originalCurrency, currency, kept, kept?.originalCurrency === input.originalCurrency && kept?.currency === currency);
+      original = { originalAmount: input.originalAmount, originalCurrency: input.originalCurrency, marketRate: r.rate };
+      paid ??= await convertNow(c.var.deps, input.originalAmount, input.originalCurrency, currency, 'AMOUNT_REQUIRED', r.rates);
     }
   }
   if (!paid) fail(400, 'amount required', 'AMOUNT_REQUIRED');
@@ -190,14 +252,16 @@ export async function sumsByCurrency(db: DB, where: SQL): Promise<CurrencySums[]
     .filter((r) => r.income !== 0 || r.expense !== 0);
 }
 
+/** Every row of the entry a transaction belongs to (a transfer's two legs and its fee). */
 async function legsOf(db: DB, userId: string, id: string): Promise<TxRow[]> {
   const [cur] = await db.select().from(transactions).where(and(eq(transactions.id, id), eq(transactions.userId, userId)));
   if (!cur) notFound('transaction');
-  if (!cur.transferGroupId) return [cur];
+  const group = cur.transferGroupId ?? cur.feeOf;
+  if (!group) return [cur];
   return db
     .select()
     .from(transactions)
-    .where(and(eq(transactions.userId, userId), eq(transactions.transferGroupId, cur.transferGroupId)));
+    .where(and(eq(transactions.userId, userId), or(eq(transactions.transferGroupId, group), eq(transactions.feeOf, group))));
 }
 
 /** Insert legs (plus tags) as one atomic batch; returns the inserted rows. */
@@ -205,15 +269,17 @@ type LegLinks = { billOccurrenceId?: string | null; statementId?: string | null;
 
 /** Transaction rows for the legs of one entry (a transfer's two legs share a group id). */
 export function legRows(userId: string, legs: Leg[], now: number, links: LegLinks = {}): TxRow[] {
-  const group = legs.length > 1 ? newId() : null;
+  const group = legs.some((l) => l.role === 'from') ? newId() : null;
   return legs.map((leg) => ({
     ...legToValues(leg),
     originalAmount: leg.originalAmount ?? null,
     originalCurrency: leg.originalCurrency ?? null,
+    marketRate: leg.marketRate ?? null,
     id: newId(),
     userId,
-    transferGroupId: group,
-    billOccurrenceId: leg.role !== 'to' ? (links.billOccurrenceId ?? null) : null,
+    transferGroupId: leg.role === 'fee' ? null : group,
+    feeOf: leg.role === 'fee' ? group : null,
+    billOccurrenceId: leg.role === 'main' || leg.role === 'from' ? (links.billOccurrenceId ?? null) : null,
     statementId: links.statementLeg && leg.role === links.statementLeg ? (links.statementId ?? null) : null,
     createdAt: now,
     updatedAt: now,
@@ -276,22 +342,26 @@ export const transactionRoutes = new Hono<AppBindings>()
     const userId = c.var.user.id;
     const id = c.req.param('id');
     const old = await legsOf(db, userId, id);
-    const edited = old.find((l) => l.id === id)!;
+    const clicked = old.find((l) => l.id === id)!;
+    // A transfer's fee row stands for the whole transfer.
+    const oldFrom = old.find((l) => l.type === 'transfer' && l.amount < 0);
+    const oldTo = old.find((l) => l.type === 'transfer' && l.amount >= 0);
+    const oldFee = old.find((l) => l.feeOf);
+    const edited = clicked.feeOf ? (oldFrom ?? clicked) : clicked;
     if (edited.type === 'trade') fail(409, 'edit stock trades on the investments page', 'TRADE_TX');
-    const legs = await planLegs(c, input, edited.extra);
+    const legs = await planLegs(c, input, edited.extra, old);
     const tagIds = await assertOwnTags(db, userId, input.tagIds);
     const t = now();
 
-    // Assign ids to the new legs.
+    // Assign ids to the new legs (kept where possible, so bill/statement links survive).
     const ids = new Map<Leg, string>();
-    if (legs.length === 2 && old.length === 2) {
-      ids.set(legs[0]!, old.find((l) => l.amount < 0)!.id);
-      ids.set(legs[1]!, old.find((l) => l.amount >= 0)!.id);
-    } else {
-      ids.set(legs[0]!, edited.id);
-      if (legs[1]) ids.set(legs[1], newId());
+    const isTransfer = legs.some((l) => l.role === 'from');
+    for (const [i, leg] of legs.entries()) {
+      if (leg.role === 'fee') ids.set(leg, oldFee?.id ?? newId());
+      else if (isTransfer && oldFrom && oldTo) ids.set(leg, leg.role === 'from' ? oldFrom.id : oldTo.id);
+      else ids.set(leg, i === 0 ? edited.id : newId());
     }
-    const group = legs.length === 2 ? (edited.transferGroupId ?? newId()) : null;
+    const group = isTransfer ? (edited.transferGroupId ?? newId()) : null;
     const keepIds = new Set(ids.values());
     const oldIds = new Set(old.map((l) => l.id));
 
@@ -305,7 +375,13 @@ export const transactionRoutes = new Hono<AppBindings>()
     }
     for (const leg of legs) {
       const legId = ids.get(leg)!;
-      const values = { ...legToValues(leg), transferGroupId: group, updatedAt: t };
+      const values = {
+        ...legToValues(leg),
+        marketRate: leg.marketRate ?? null,
+        transferGroupId: leg.role === 'fee' ? null : group,
+        feeOf: leg.role === 'fee' ? group : null,
+        updatedAt: t,
+      };
       if (oldIds.has(legId)) {
         ops.push(db.update(transactions).set(values).where(and(eq(transactions.id, legId), eq(transactions.userId, userId))));
       } else {

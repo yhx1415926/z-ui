@@ -163,6 +163,8 @@ export interface CardDto {
   bin: string | null;
   last4: string;
   hasPan: boolean;
+  /** A security code (CVV/CVN/PIN) is stored; fetch it with POST /cards/:id/cvv. */
+  hasCvv: boolean;
   expMonth: number | null;
   expYear: number | null;
   holderName: string | null;
@@ -222,6 +224,17 @@ export interface TransactionDto {
   /** Foreign-currency charge: what the merchant billed (amount is what the account paid). */
   originalAmount: number | null;
   originalCurrency: string | null;
+  /**
+   * Synced FX rate when recorded (destination/booked currency per 1 unit of the source/original
+   * currency), for the exchange loss; null for same-currency entries and older records.
+   */
+  marketRate: number | null;
+  /** Transfers: fee charged by the source account (in the source currency), booked as its own expense. */
+  fee: number | null;
+  feeCurrency: string | null;
+  /** The fee expense of a transfer: its group id, and the transfer's outgoing leg (edit that). */
+  feeOf: string | null;
+  feeParentId: string | null;
   tagIds: string[];
   extra: Record<string, unknown>;
   createdAt: number;

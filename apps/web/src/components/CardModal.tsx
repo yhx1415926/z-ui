@@ -44,6 +44,9 @@ interface CardFormValues {
   status: CardStatus;
   panMode: PanMode;
   pan?: string;
+  /** New security code (never pre-filled: the stored one stays on the server). */
+  cvv?: string;
+  forgetCvv?: boolean;
   last4?: string;
   bin?: string;
   brand?: CardBrand;
@@ -177,6 +180,9 @@ export function CardModal({
       extra: f.extra ?? {},
     };
     if (f.panMode === 'full') body.pan = f.pan;
+    // Left blank: the stored code stays as it is.
+    if (f.forgetCvv) body.cvv = null;
+    else if (f.cvv) body.cvv = f.cvv;
     if (f.panMode === 'last4') {
       Object.assign(body, { last4: f.last4, bin: f.bin || null, brand: f.brand ?? (f.bin ? detectBrand(f.bin) : 'other') });
       if (editing?.hasPan) body.pan = null;
@@ -306,6 +312,35 @@ export function CardModal({
             <Form.Item name="holderName" label={t('card.holder')}>
               <Input maxLength={64} style={{ textTransform: 'uppercase' }} autoComplete="cc-name" />
             </Form.Item>
+          </Col>
+        </Row>
+        <Row gutter={12} align="middle">
+          <Col span={8}>
+            <Form.Item
+              name="cvv"
+              label={t('card.cvv')}
+              rules={[{ pattern: /^(\d{3}|\d{4}|\d{6})$/, message: t('card.cvvHint') }]}
+              normalize={(val: string) => (val ?? '').replace(/\D/g, '').slice(0, 6)}
+            >
+              <Input.Password
+                inputMode="numeric"
+                maxLength={6}
+                autoComplete="off"
+                placeholder={editing?.hasCvv ? t('card.cvvKept') : t('common.optional')}
+                disabled={!!v?.forgetCvv}
+              />
+            </Form.Item>
+          </Col>
+          <Col span={16}>
+            {editing?.hasCvv ? (
+              <Form.Item name="forgetCvv" valuePropName="checked" style={{ marginBottom: 0 }}>
+                <Checkbox>{t('card.forgetCvv')}</Checkbox>
+              </Form.Item>
+            ) : (
+              <span className="muted" style={{ fontSize: 12 }}>
+                {t('card.cvvHelp')}
+              </span>
+            )}
           </Col>
         </Row>
         {isVirtual && (

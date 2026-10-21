@@ -1,14 +1,14 @@
 import { DeleteOutlined } from '@ant-design/icons';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, App, Button, Checkbox, DatePicker, Form, Input, Modal, Popconfirm, Segmented, Select, Space, Typography } from 'antd';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
 import { fromMinor, HIDDEN_TAG, type AccountDto, type TagDto, type TransactionDto, type TransactionType } from '@z-ui/shared';
-import { del, post, put } from '../api/client.ts';
+import { del, get, post, put } from '../api/client.ts';
 import { errorText, invalidateLedger, useConfig } from '../api/hooks.ts';
-import { cardLabel, useAccountOptions, useDecimals, useFxConvert, useLookups, useMoney } from '../lib/format.ts';
+import { cardLabel, useAccountOptions, useDecimals, useFxConvert, useFxLossText, useFxRate, useLookups, useMoney } from '../lib/format.ts';
 import { CustomFieldInputs } from './CustomFields.tsx';
 import { MoneyInput } from './Money.tsx';
 
@@ -23,6 +23,8 @@ interface Values {
   toCurrency?: string;
   amount?: number | null;
   toAmount?: number | null;
+  /** Transfers: fee charged on top by the source account (booked as its own expense). */
+  fee?: number | null;
   /** Charged in another currency than the account's (e.g. USD from a CNY-only wallet). */
   foreign?: boolean;
   originalCurrency?: string;
@@ -56,6 +58,7 @@ function initialValues(tx: TransactionDto | null | undefined, d: TxDefaults): Pa
       toCurrency: out ? other.currency : tx.currency,
       amount: out ? -tx.amount : -other.amount,
       toAmount: out ? other.amount : tx.amount,
+      fee: tx.fee,
     };
   }
   return {
@@ -84,17 +87,26 @@ function CurrencyPick({ account, value, onChange }: { account?: AccountDto; valu
   );
 }
 
-export function TransactionModal({
-  open,
-  onClose,
-  editing,
-  defaults = {},
-}: {
+interface ModalProps {
   open: boolean;
   onClose: () => void;
   editing?: TransactionDto | null;
   defaults?: TxDefaults;
-}) {
+}
+
+/** A transfer's fee row opens the transfer it belongs to. */
+export function TransactionModal(props: ModalProps) {
+  const parentId = props.editing?.feeParentId ?? null;
+  const { data: parent } = useQuery({
+    queryKey: ['transaction', parentId],
+    queryFn: () => get<TransactionDto>(`/transactions/${parentId}`),
+    enabled: props.open && !!parentId,
+  });
+  if (!parentId) return <TransactionForm {...props} />;
+  return <TransactionForm {...props} open={props.open && !!parent} editing={parent ?? null} />;
+}
+
+function TransactionForm({ open, onClose, editing, defaults = {} }: ModalProps) {
   const { t } = useTranslation();
   const { message } = App.useApp();
   const qc = useQueryClient();
@@ -105,6 +117,8 @@ export function TransactionModal({
   const decimals = useDecimals();
   const accountOptions = useAccountOptions();
   const fx = useFxConvert();
+  const marketRate = useFxRate();
+  const lossText = useFxLossText();
   const money = useMoney();
   const { data: cfg } = useConfig();
 
@@ -149,7 +163,19 @@ export function TransactionModal({
   const hiddenTag = L.tags.find((tg) => tg.name.toLowerCase() === HIDDEN_TAG);
 
   const rateOf = (paid: number, from: string, got: number, to: string) => (Number(fromMinor(got, decimals(to))) / Number(fromMinor(paid, decimals(from)))).toFixed(4);
+  /** Market rate to judge the exchange by: the one recorded with the entry while its currencies are unchanged, else today's. */
+  const refRate = (a: string, b: string) => {
+    if (editing?.marketRate) {
+      const init = initialValues(editing, {});
+      const pair = init.type === 'transfer' ? [init.fromCurrency, init.toCurrency] : [init.originalCurrency, init.currency];
+      if (pair[0] === a && pair[1] === b) return editing.marketRate;
+    }
+    return marketRate(a, b);
+  };
+  const withLoss = (text: string, loss: string | null) => (loss ? `${text} · ${loss}` : text);
   const rate = crossCurrency && amount && toAmount ? rateOf(amount, fromCurrency!, toAmount, toCurrency!) : null;
+  const transferLoss =
+    rate !== null ? lossText({ a: amount!, aCurrency: fromCurrency!, b: toAmount!, bCurrency: toCurrency!, rate: refRate(fromCurrency!, toCurrency!), paying: false }) : null;
   // Left blank, the received amount is converted at the current rate (shown as the placeholder).
   const toEstimate = crossCurrency && amount && !toAmount ? fx(amount, fromCurrency!, toCurrency!) : null;
 
@@ -160,7 +186,10 @@ export function TransactionModal({
   const foreignHint = !foreign
     ? undefined
     : amount && originalAmount
-      ? t('tx.rate', { from: originalCurrency, rate: rateOf(originalAmount, originalCurrency!, amount, currency!), to: currency })
+      ? withLoss(
+          t('tx.rate', { from: originalCurrency, rate: rateOf(originalAmount, originalCurrency!, amount, currency!), to: currency }),
+          lossText({ a: originalAmount, aCurrency: originalCurrency!, b: amount, bCurrency: currency!, rate: refRate(originalCurrency!, currency!), paying: type === 'expense' }),
+        )
       : !originalAmount
         ? t('tx.paidHint')
         : paidEstimate !== null
@@ -186,7 +215,17 @@ export function TransactionModal({
       const base = { occurredAt: v.occurredAt.format('YYYY-MM-DD'), note: v.note || null, counterparty: v.counterparty || null, tagIds, extra: v.extra ?? {} };
       const body =
         v.type === 'transfer'
-          ? { ...base, type: 'transfer', fromAccountId: v.fromAccountId, fromCurrency, toAccountId: v.toAccountId, toCurrency, amount: v.amount, toAmount: crossCurrency ? (v.toAmount ?? null) : null }
+          ? {
+              ...base,
+              type: 'transfer',
+              fromAccountId: v.fromAccountId,
+              fromCurrency,
+              toAccountId: v.toAccountId,
+              toCurrency,
+              amount: v.amount,
+              toAmount: crossCurrency ? (v.toAmount ?? null) : null,
+              fee: v.fee || null,
+            }
           : v.type === 'adjustment'
             ? { ...base, type: 'adjustment', accountId: v.accountId, currency, amount: v.amount }
             : {
@@ -318,7 +357,7 @@ export function TransactionModal({
                 label={t('tx.toAmount')}
                 extra={
                   rate
-                    ? t('tx.rate', { from: fromCurrency, rate, to: toCurrency })
+                    ? withLoss(t('tx.rate', { from: fromCurrency, rate, to: toCurrency }), transferLoss)
                     : !amount
                       ? t('tx.toAmountHint')
                       : toEstimate !== null
@@ -329,6 +368,9 @@ export function TransactionModal({
                 <MoneyInput currency={toCurrency!} placeholder={toEstimate !== null ? fromMinor(toEstimate, decimals(toCurrency!)) : undefined} />
               </Form.Item>
             )}
+            <Form.Item name="fee" label={t('tx.fee', { currency: fromCurrency ?? '' })} extra={t('tx.feeHint')}>
+              <MoneyInput currency={fromCurrency ?? '—'} placeholder={t('common.optional')} />
+            </Form.Item>
           </>
         ) : (
           <>

@@ -2,7 +2,9 @@ import { InputNumber } from 'antd';
 import { animate, useReducedMotion } from 'motion/react';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { fromMinor, toMinor } from '@z-ui/shared';
-import { useDecimals, useMoney } from '../lib/format.ts';
+import { useTranslation } from 'react-i18next';
+import type { TransactionDto } from '@z-ui/shared';
+import { useDecimals, useFxLossText, useMoney } from '../lib/format.ts';
 
 /** Number that eases from its previous value to the new one (balances, totals). */
 export function AnimatedNumber({ value, format, duration = 0.7 }: { value: number; format: (n: number) => string; duration?: number }) {
@@ -52,13 +54,38 @@ export function MoneyText({
   );
 }
 
-/** "≈ US$20.00" under an amount paid in another currency (foreign-currency charge). */
-export function OriginalAmount({ tx }: { tx: { originalAmount: number | null; originalCurrency: string | null } }) {
+/**
+ * Small grey lines under a transaction's amount: the original amount of a foreign-currency charge,
+ * a transfer's fee (on the outgoing leg), and the exchange loss against the market rate recorded
+ * with the entry.
+ */
+export function TxExtras({ tx }: { tx: TransactionDto }) {
+  const { t } = useTranslation();
   const money = useMoney();
-  if (tx.originalAmount === null || !tx.originalCurrency) return null;
+  const lossText = useFxLossText();
+  const lines: string[] = [];
+  if (tx.originalAmount !== null && tx.originalCurrency) {
+    lines.push(money(tx.originalAmount, tx.originalCurrency));
+    lines.push(lossText({ a: tx.originalAmount, aCurrency: tx.originalCurrency, b: Math.abs(tx.amount), bCurrency: tx.currency, rate: tx.marketRate, paying: tx.type === 'expense' }) ?? '');
+  }
+  if (tx.type === 'transfer' && tx.counterpartAmount !== null && tx.counterpartCurrency) {
+    const out = tx.amount < 0;
+    if (out && tx.fee && tx.feeCurrency) lines.push(t('tx.feeShort', { amount: money(tx.fee, tx.feeCurrency) }));
+    lines.push(
+      lossText(
+        out
+          ? { a: -tx.amount, aCurrency: tx.currency, b: tx.counterpartAmount, bCurrency: tx.counterpartCurrency, rate: tx.marketRate, paying: false }
+          : { a: -tx.counterpartAmount, aCurrency: tx.counterpartCurrency, b: tx.amount, bCurrency: tx.currency, rate: tx.marketRate, paying: false },
+      ) ?? '',
+    );
+  }
+  const shown = lines.filter(Boolean);
+  if (!shown.length) return null;
   return (
-    <div className="muted num" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
-      {money(tx.originalAmount, tx.originalCurrency)}
+    <div className="muted num" style={{ fontSize: 12, whiteSpace: 'nowrap', lineHeight: 1.4 }}>
+      {shown.map((l) => (
+        <div key={l}>{l}</div>
+      ))}
     </div>
   );
 }

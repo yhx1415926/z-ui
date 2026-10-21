@@ -1,7 +1,7 @@
 import { ArrowLeftOutlined, CopyOutlined, DeleteOutlined, EditOutlined, EyeInvisibleOutlined, EyeOutlined, InboxOutlined, MoreOutlined, PlusOutlined } from '@ant-design/icons';
 import { App, Button, Card, Col, Descriptions, Drawer, Dropdown, Empty, Row, Segmented, Skeleton, Space, Switch, Tabs, Tag, Typography } from 'antd';
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { BRAND_META, isExpired, type CardDto, type CardForm } from '@z-ui/shared';
@@ -33,9 +33,13 @@ function CardDrawer({ card, onClose, onEdit, onBack }: { card: CardDto | null; o
   const { data: statements = [] } = useStatements();
   const [flipped, setFlipped] = useState(false);
   const [pan, setPan] = useState<string | null>(null);
+  // The security code is asked for only when the card is turned over, and forgotten when turned back.
+  const [cvv, setCvv] = useState<string | null>(null);
+  const showingBack = useRef(false);
   const [, setParams] = useSearchParams();
   const cfTabs = useCustomFieldTabs('card', card?.extra);
   const reveal = useAction((id: string) => post<{ pan: string }>(`/cards/${id}/reveal`), { success: false, invalidate: [] });
+  const revealCvv = useAction((id: string) => post<{ cvv: string }>(`/cards/${id}/cvv`), { success: false, invalidate: [] });
   const archive = useAction((c: CardDto) => patch(`/cards/${c.id}`, { archived: !c.archived }));
   const remove = useAction((c: CardDto) => del(`/cards/${c.id}`), { success: t('common.deleted') });
 
@@ -46,8 +50,15 @@ function CardDrawer({ card, onClose, onEdit, onBack }: { card: CardDto | null; o
     return () => clearTimeout(id);
   }, [pan]);
   useEffect(() => {
+    if (!cvv) return;
+    const id = setTimeout(() => setCvv(null), 30_000);
+    return () => clearTimeout(id);
+  }, [cvv]);
+  useEffect(() => {
     setPan(null);
+    setCvv(null);
     setFlipped(false);
+    showingBack.current = false;
   }, [card?.id]);
 
   if (!card) return <Drawer open={false} />;
@@ -97,7 +108,20 @@ function CardDrawer({ card, onClose, onEdit, onBack }: { card: CardDto | null; o
       }
     >
       <div style={{ display: 'flex', justifyContent: 'center' }}>
-        <BankCard card={card} bankName={inst?.name} pan={pan} flipped={flipped} onClick={() => setFlipped((f) => !f)} />
+        <BankCard
+          card={card}
+          bankName={inst?.name}
+          pan={pan}
+          securityCode={revealCvv.isPending ? '…' : cvv}
+          flipped={flipped}
+          onClick={() => {
+            const back = !flipped;
+            setFlipped(back);
+            showingBack.current = back;
+            if (!back) setCvv(null);
+            else if (card.hasCvv) revealCvv.mutate(card.id, { onSuccess: (r) => showingBack.current && setCvv(r.cvv) });
+          }}
+        />
       </div>
       <Typography.Paragraph type="secondary" style={{ textAlign: 'center', fontSize: 12, margin: '8px 0 12px' }}>
         {t('card.flip')}

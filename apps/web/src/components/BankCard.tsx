@@ -62,6 +62,7 @@ export function BankCard({
   card,
   bankName,
   pan,
+  securityCode,
   flipped = false,
   onClick,
   width,
@@ -69,6 +70,8 @@ export function BankCard({
   card: CardFace;
   bankName?: string;
   pan?: string | null;
+  /** Shown in the signature strip on the back; fetched only once the card is turned over. */
+  securityCode?: string | null;
   flipped?: boolean;
   onClick?: () => void;
   width?: number;
@@ -117,7 +120,10 @@ export function BankCard({
         </div>
         <div className={`bank-card-face bank-card-back card-theme-${card.theme}`}>
           <div className="card-stripe" />
-          <div className="card-sign">•••</div>
+          <div className="card-sign">
+            <span className="card-sign-label">CVV / PIN</span>
+            <span className="card-sign-code">{securityCode ?? '•••'}</span>
+          </div>
           <div className="card-bottom">
             <div>
               <div className="card-label">BIN</div>

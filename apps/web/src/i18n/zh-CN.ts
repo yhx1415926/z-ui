@@ -190,6 +190,11 @@ const zh = {
     beforeBalanceDate: '在余额日期当天或之前，已包含在同步的余额里，不计入余额',
   },
   card: {
+    cvv: '安全码（CVV/CVN/PIN）',
+    cvvHint: '3、4 或 6 位数字',
+    cvvKept: '已保存，留空不修改',
+    forgetCvv: '删除已保存的安全码',
+    cvvHelp: '加密保存；只在登录后翻转卡片时取回显示（需验证身份）',
     title: '卡片',
     add: '添加卡片',
     edit: '编辑卡片',
@@ -238,6 +243,11 @@ const zh = {
     addToAccount: '添加卡片',
   },
   tx: {
+    fee: '手续费（{{currency}}）',
+    feeHint: '由转出账户另外扣除，单独记为一笔「转账手续费」支出（计入统计）',
+    feeShort: '手续费 {{amount}}',
+    fxLoss: '汇损 {{amount}}（{{pct}}%）',
+    fxGain: '汇兑收益 {{amount}}（{{pct}}%）',
     foreign: '外币消费（例如支付宝用人民币支付美元）',
     originalAmount: '消费金额（原币）',
     paidAmount: '实际扣款（{{currency}}）',
@@ -667,6 +677,8 @@ const zh = {
     network: '网络错误',
     generic: '操作失败',
     codes: {
+      NO_CVV: '这张卡没有保存安全码',
+      AMOUNT_MISMATCH: '同币种转账的转出和到账金额必须相同，手续费请填在「手续费」里',
       AMOUNT_REQUIRED: '没有可用的汇率：请填写实际金额，或先同步汇率',
       TO_AMOUNT_REQUIRED: '没有可用的汇率：请填写到账金额，或先同步汇率',
       AUTOPAY_SAME_ACCOUNT: '自动还款账户不能是信用卡自己的账户',

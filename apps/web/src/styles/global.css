@@ -1548,3 +1548,18 @@ html[data-theme='light'] .login-blob {
   margin: 4px 0 0;
   padding-inline-start: 18px;
 }
+
+/* Security code in the signature strip on the back of the card. */
+.bank-card .card-sign {
+  justify-content: space-between;
+}
+.bank-card .card-sign-label {
+  font-family: inherit;
+  font-size: 2.3cqw;
+  letter-spacing: 0.04em;
+  opacity: 0.6;
+}
+.bank-card .card-sign-code {
+  font-weight: 600;
+  letter-spacing: 0.12em;
+}

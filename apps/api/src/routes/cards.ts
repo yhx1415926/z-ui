@@ -28,6 +28,7 @@ import { today } from './bills.ts';
 type Row = typeof cards.$inferSelect;
 
 const panContext = (cardId: string) => `card:${cardId}:pan`;
+const cvvContext = (cardId: string) => `card:${cardId}:cvv`;
 
 /**
  * Card DTOs with `spent` filled for cards that have a monthly or total limit: expenses paid
@@ -62,9 +63,10 @@ async function toDtos(db: DB, userId: string, rows: Row[], now: number): Promise
     }
   }
   return rows.map((r) => {
-    const { userId: _u, panEnc, ...rest } = r;
+    const { userId: _u, panEnc, cvvEnc, ...rest } = r;
     return {
       ...rest,
+      hasCvv: cvvEnc !== null,
       brand: r.brand as CardBrand,
       theme: r.theme as CardDto['theme'],
       binInfo: (r.binInfo as CardDto['binInfo']) ?? null,
@@ -160,6 +162,7 @@ export const cardRoutes = new Hono<AppBindings>()
       bin: fromPan?.bin ?? input.bin ?? null,
       last4: fromPan?.last4 ?? input.last4!,
       panEnc: fromPan?.panEnc ?? null,
+      cvvEnc: input.cvv ? await encryptField(c.var.deps.env.APP_ENC_KEY, input.cvv, cvvContext(id)) : null,
       expMonth: input.expMonth ?? null,
       expYear: input.expYear ?? null,
       holderName: input.holderName ?? null,
@@ -184,7 +187,9 @@ export const cardRoutes = new Hono<AppBindings>()
     const userId = c.var.user.id;
     const cur = await ownCard(db, userId, c.req.param('id'));
     if (input.accountId) await ownAccount(db, userId, input.accountId);
-    const { pan, extra, last4, parentCardId, binInfo, autopayAccountId, autopayCurrency, autopayMode, ...fields } = input;
+    const { pan, cvv, extra, last4, parentCardId, binInfo, autopayAccountId, autopayCurrency, autopayMode, ...fields } = input;
+    // cvv: digits → replace; null/"" → forget; undefined → unchanged.
+    const cvvUpdate = cvv === undefined ? {} : { cvvEnc: cvv ? await encryptField(c.var.deps.env.APP_ENC_KEY, cvv, cvvContext(cur.id)) : null };
     const autopay = await autopayFields(
       c.var.deps,
       userId,
@@ -214,6 +219,7 @@ export const cardRoutes = new Hono<AppBindings>()
         ...defined(fields),
         ...(last4 ? { last4 } : {}),
         ...panUpdate,
+        ...cvvUpdate,
         ...parentUpdate,
         ...binInfoUpdate,
         ...limitUpdate,
@@ -252,4 +258,14 @@ export const cardRoutes = new Hono<AppBindings>()
     await audit(c, 'card.reveal', { card: cur.id, last4: cur.last4 });
     c.header('Cache-Control', 'no-store');
     return c.json({ pan });
+  })
+
+  /** Security code, asked for when the card is turned over. Same protection as the number; audited. */
+  .post('/:id/cvv', requireStepUp, async (c) => {
+    const cur = await ownCard(c.var.deps.db, c.var.user.id, c.req.param('id'));
+    if (!cur.cvvEnc) fail(404, 'no security code stored', 'NO_CVV');
+    const cvv = await decryptField(c.var.deps.env.APP_ENC_KEY, cur.cvvEnc, cvvContext(cur.id));
+    await audit(c, 'card.reveal_cvv', { card: cur.id, last4: cur.last4 });
+    c.header('Cache-Control', 'no-store');
+    return c.json({ cvv });
   });

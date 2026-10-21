@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_RULES } from '@z-ui/shared';
 import { MIGRATIONS_DIR, openLibsql } from '../src/db/client.ts';
+import { cards } from '../src/db/schema.ts';
 import { MAX_SUBREQUESTS } from '../src/lib/chunks.ts';
 import { runDaily, runPriceWatch } from '../src/lib/cron.ts';
 import type { MailMessage } from '../src/lib/mail.ts';
@@ -468,5 +469,144 @@ describe('daily cron', () => {
     await runDaily(t.deps);
     expect(sent).toHaveLength(14);
     expect(await bal(a, debit.id, 'CNY')).toBe(500000 - 120000 - 3003);
+  });
+});
+
+// ---------------------------------------------------------------- security code (CVV / CVN / PIN)
+
+describe('card security code', () => {
+  it('is stored encrypted and only revealed after a fresh verification', async () => {
+    const u = await makeUser(t, 'alice');
+    const a = await login(t, u);
+    const acc = await account(a, await bank(a), [{ currency: 'CNY', openingBalance: 0 }]);
+    const card = (await a.post('/api/cards', { accountId: acc.id, last4: '4242', funding: 'debit', cvv: '123' })).json;
+    expect(card.hasCvv).toBe(true);
+    // Never part of a listing or a card payload.
+    const list = await a.get('/api/cards');
+    expect(JSON.stringify(list.json)).not.toMatch(/"cvv|cvvEnc|"123"/);
+    const [stored] = await t.db.select({ enc: cards.cvvEnc }).from(cards);
+    expect(stored!.enc).toBeTruthy();
+    expect(stored!.enc).not.toContain('123');
+
+    t.advance(6 * 60_000); // past the 5 minutes a sign-in counts as verification
+    expect((await a.post(`/api/cards/${card.id}/cvv`)).json.code).toBe('STEP_UP_REQUIRED');
+    t.advance(30_000);
+    await a.post('/api/auth/step-up/totp', { code: u.code() });
+    expect((await a.post(`/api/cards/${card.id}/cvv`)).json).toEqual({ cvv: '123' });
+    expect((await a.get('/api/auth/audit')).json.some((e: any) => e.action === 'card.reveal_cvv')).toBe(true);
+
+    // A 6-digit PIN is accepted the same way; omitted keeps it; empty forgets it.
+    expect((await a.patch(`/api/cards/${card.id}`, { cvv: '654321' })).json.hasCvv).toBe(true);
+    expect((await a.patch(`/api/cards/${card.id}`, { nickname: 'x' })).json.hasCvv).toBe(true);
+    expect((await a.post(`/api/cards/${card.id}/cvv`)).json.cvv).toBe('654321');
+    expect((await a.patch(`/api/cards/${card.id}`, { cvv: '12345' })).status).toBe(400);
+    expect((await a.patch(`/api/cards/${card.id}`, { cvv: '' })).json.hasCvv).toBe(false);
+    expect((await a.post(`/api/cards/${card.id}/cvv`)).json.code).toBe('NO_CVV');
+  });
+});
+
+// ---------------------------------------------------------------- transfer fees & exchange loss
+
+describe('transfer fees and market rates', () => {
+  it('books a same-currency transfer fee as an expense of the source account', async () => {
+    const a = await login(t, await makeUser(t, 'alice'));
+    await a.post('/api/categories', { kind: 'expense', name: '银行手续费' });
+    const inst = await bank(a);
+    const from = await account(a, inst, [{ currency: 'CNY', openingBalance: 100000 }], 'checking', 'From');
+    const to = await account(a, inst, [{ currency: 'CNY', openingBalance: 0 }], 'checking', 'To');
+    const tr = await a.post('/api/transactions', { type: 'transfer', fromAccountId: from.id, toAccountId: to.id, amount: 50000, fee: 500, occurredAt: '2026-10-10' });
+    expect(tr.status).toBe(201);
+    expect(tr.json).toMatchObject({ amount: -50000, fee: 500, feeCurrency: 'CNY', counterpartAmount: 50000 });
+    expect(await bal(a, from.id, 'CNY')).toBe(100000 - 50000 - 500);
+    expect(await bal(a, to.id, 'CNY')).toBe(50000);
+
+    const items = (await a.get('/api/transactions')).json.items;
+    const feeRow = items.find((x: any) => x.type === 'expense');
+    expect(feeRow).toMatchObject({ amount: -500, counterparty: '转账手续费', feeOf: tr.json.transferGroupId, feeParentId: tr.json.id });
+    expect(feeRow.categoryId).toBeTruthy();
+    // The fee is spending; the transfer itself is not.
+    expect((await a.get('/api/stats?from=2026-10-01&to=2026-10-31&currency=CNY')).json.totals).toMatchObject({ expense: 500, income: 0 });
+
+    // Editing through the fee row edits the transfer; dropping the fee removes its row.
+    const edited = await a.put(`/api/transactions/${feeRow.id}`, { type: 'transfer', fromAccountId: from.id, toAccountId: to.id, amount: 40000, fee: 300, occurredAt: '2026-10-10' });
+    expect(edited.json).toMatchObject({ id: tr.json.id, amount: -40000, fee: 300 });
+    expect((await a.get('/api/transactions')).json.items.find((x: any) => x.type === 'expense').id).toBe(feeRow.id);
+    await a.put(`/api/transactions/${tr.json.id}`, { type: 'transfer', fromAccountId: from.id, toAccountId: to.id, amount: 40000, occurredAt: '2026-10-10' });
+    expect((await a.get('/api/transactions')).json.items.map((x: any) => x.type)).toEqual(['transfer', 'transfer']);
+    expect(await bal(a, from.id, 'CNY')).toBe(60000);
+
+    // Deleting the transfer takes its fee along.
+    await a.put(`/api/transactions/${tr.json.id}`, { type: 'transfer', fromAccountId: from.id, toAccountId: to.id, amount: 40000, fee: 100, occurredAt: '2026-10-10' });
+    expect((await a.del(`/api/transactions/${tr.json.id}`)).json.deleted).toBe(3);
+    expect(await bal(a, from.id, 'CNY')).toBe(100000);
+    expect((await a.get('/api/transactions')).json.total).toBe(0);
+  });
+
+  it('remembers the market rate of an exchange, also across edits', async () => {
+    const a = await login(t, await makeUser(t, 'alice'));
+    await a.put('/api/fx/CNY', { perUsd: 7.2 });
+    const inst = await bank(a);
+    const usd = await account(a, inst, [{ currency: 'USD', openingBalance: 100000 }]);
+    const cny = await account(a, inst, [{ currency: 'CNY', openingBalance: 100000 }]);
+    const tr = await a.post('/api/transactions', { type: 'transfer', fromAccountId: usd.id, toAccountId: cny.id, amount: 10000, toAmount: 71500, occurredAt: '2026-10-10' });
+    expect(tr.json.marketRate).toBeCloseTo(7.2);
+    const charge = await a.post('/api/transactions', { type: 'expense', accountId: cny.id, originalCurrency: 'USD', originalAmount: 2000, amount: 14520, occurredAt: '2026-10-10' });
+    expect(charge.json.marketRate).toBeCloseTo(7.2);
+    const same = await a.post('/api/transactions', { type: 'expense', accountId: cny.id, amount: 100, occurredAt: '2026-10-10' });
+    expect(same.json.marketRate).toBeNull();
+
+    // Rates move; editing the note keeps the rate the entry was recorded with.
+    await a.put('/api/fx/CNY', { perUsd: 7.0 });
+    const note = await a.put(`/api/transactions/${charge.json.id}`, { type: 'expense', accountId: cny.id, originalCurrency: 'USD', originalAmount: 2000, amount: 14520, note: 'x', occurredAt: '2026-10-10' });
+    expect(note.json.marketRate).toBeCloseTo(7.2);
+    const legs = (await a.get('/api/transactions')).json.items.filter((x: any) => x.type === 'transfer');
+    expect(legs.map((l: any) => l.marketRate)).toEqual([expect.closeTo(7.2), expect.closeTo(7.2)]);
+    // Another original currency: re-rated now (EUR has no rate → null, the paid amount was given).
+    const eur = await a.put(`/api/transactions/${charge.json.id}`, { type: 'expense', accountId: cny.id, originalCurrency: 'EUR', originalAmount: 2000, amount: 15000, occurredAt: '2026-10-10' });
+    expect(eur.json.marketRate).toBeNull();
+  });
+
+  it('computes the exchange loss against the market', async () => {
+    const { fxLoss } = await import('@z-ui/shared');
+    // Paid ¥145.20 for $20.00 at 7.2 → ¥1.20 more than the market (0.83 %).
+    const paid = fxLoss({ a: 2000, aDecimals: 2, b: 14520, bDecimals: 2, rate: 7.2, paying: true })!;
+    expect(paid.loss).toBe(120);
+    expect(paid.pct).toBeCloseTo(0.833, 2);
+    // Sent $100, received ¥715 at 7.2 → ¥5 less than the market.
+    expect(fxLoss({ a: 10000, aDecimals: 2, b: 71500, bDecimals: 2, rate: 7.2, paying: false })!.loss).toBe(500);
+    // JPY has no decimals; a better-than-market rate is a gain (negative loss).
+    expect(fxLoss({ a: 10000, aDecimals: 2, b: 15100, bDecimals: 0, rate: 150, paying: false })!.loss).toBe(-100);
+  });
+});
+
+describe('migration 0005', () => {
+  it('adds the security code, fee link and market rate columns empty', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zui-mig-'));
+    try {
+      const old = join(dir, 'migrations');
+      mkdirSync(join(old, 'meta'), { recursive: true });
+      const journal = JSON.parse(readFileSync(join(MIGRATIONS_DIR, 'meta/_journal.json'), 'utf8'));
+      journal.entries = journal.entries.filter((e: { idx: number }) => e.idx <= 4);
+      writeFileSync(join(old, 'meta/_journal.json'), JSON.stringify(journal));
+      for (const f of readdirSync(MIGRATIONS_DIR).filter((f) => /^000[0-4]_/.test(f))) copyFileSync(join(MIGRATIONS_DIR, f), join(old, f));
+      const url = `file:${join(dir, 'old.db')}`;
+      const raw = createClient({ url });
+      await migrate(drizzle(raw), { migrationsFolder: old });
+      await raw.executeMultiple(`
+        INSERT INTO users (id, username, display_name, role, status, webauthn_user_id, totp_enabled, created_at, updated_at) VALUES ('u1','alice','Alice','admin','active','w',0,0,0);
+        INSERT INTO institutions (id, user_id, name, country, type, extra, sort, archived, created_at, updated_at) VALUES ('i1','u1','CMB','CN','bank','{}',0,0,0,0);
+        INSERT INTO accounts (id, user_id, institution_id, name, type, currency, opening_date, extra, sort, archived, created_at, updated_at) VALUES ('a1','u1','i1','Debit','checking','CNY','2026-01-01','{}',0,0,0,0);
+        INSERT INTO cards (id, user_id, account_id, form, status, single_use, brand, funding, last4, pan_enc, theme, extra, archived, created_at, updated_at) VALUES ('c1','u1','a1','physical','active',0,'visa','debit','4242','enc','midnight','{}',0,0,0);
+        INSERT INTO transactions (id, user_id, account_id, type, amount, currency, occurred_at, original_amount, original_currency, extra, created_at, updated_at) VALUES ('t1','u1','a1','expense',-14520,'CNY','2026-10-01',2000,'USD','{}',0,0);
+      `);
+      raw.close();
+      await openLibsql(url);
+      const check = createClient({ url });
+      expect((await check.execute('SELECT pan_enc, cvv_enc FROM cards')).rows[0]).toMatchObject({ pan_enc: 'enc', cvv_enc: null });
+      expect((await check.execute('SELECT amount, original_amount, market_rate, fee_of FROM transactions')).rows[0]).toMatchObject({ amount: -14520, original_amount: 2000, market_rate: null, fee_of: null });
+      check.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

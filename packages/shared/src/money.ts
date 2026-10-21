@@ -97,3 +97,22 @@ function numberToPlainString(n: number): string {
   // Avoid exponent notation for very small/large numbers.
   return n.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 20 });
 }
+
+/** Units of `to` per 1 unit of `from` from USD-based rates (null when one is missing). */
+export function pairRate(perUsd: (code: string) => number | null | undefined, from: string, to: string): number | null {
+  const a = from === 'USD' ? 1 : perUsd(from);
+  const b = to === 'USD' ? 1 : perUsd(to);
+  return a && b ? b / a : null;
+}
+
+/**
+ * Exchange loss against the market rate, in minor units of currency B (> 0 = loss, < 0 = gain).
+ * `a` (currency A) was exchanged for `b` (currency B); `rate` = B per 1 A at the market.
+ * paying = B is what you paid (a foreign-currency purchase); otherwise B is what you received.
+ */
+export function fxLoss(p: { a: number; aDecimals: number; b: number; bDecimals: number; rate: number; paying: boolean }): { loss: number; pct: number } | null {
+  if (!(p.rate > 0) || p.a <= 0 || p.b <= 0) return null;
+  const fair = (p.a / 10 ** p.aDecimals) * p.rate * 10 ** p.bDecimals;
+  const loss = Math.round(p.paying ? p.b - fair : fair - p.b);
+  return { loss, pct: (loss / fair) * 100 };
+}
