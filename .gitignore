@@ -10,6 +10,7 @@ coverage/
 wrangler.jsonc
 wrangler.jsonc.*
 !wrangler.jsonc.example
+backup.sql
 data/
 *.db
 *.db-journal
