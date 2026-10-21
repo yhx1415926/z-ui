@@ -16,15 +16,17 @@ import { pairsOf, recalcOps } from '../lib/balances.ts';
 import { inChunks } from '../lib/chunks.ts';
 import { body, fail, notFound, query } from '../lib/http.ts';
 import { newId } from '../lib/id.ts';
-import { accountCurrency, applyExtra, assertOwnTags, ownAccount, ownCard, ownCategory, runBatch } from '../lib/ledger.ts';
+import { accountCurrency, applyExtra, assertCurrency, assertOwnTags, ownAccount, ownCard, ownCategory, runBatch } from '../lib/ledger.ts';
+import { convertNow } from './fx.ts';
 
 export type TxRow = typeof transactions.$inferSelect;
 type C = Context<AppBindings>;
 
 /** Row content derived from a request, before ids/timestamps are attached. */
-type Leg = Pick<TxRow, 'accountId' | 'cardId' | 'type' | 'amount' | 'currency' | 'occurredAt' | 'categoryId' | 'counterparty' | 'note' | 'extra'> & {
-  role: 'main' | 'from' | 'to';
-};
+type Leg = Pick<TxRow, 'accountId' | 'cardId' | 'type' | 'amount' | 'currency' | 'occurredAt' | 'categoryId' | 'counterparty' | 'note' | 'extra'> &
+  Partial<Pick<TxRow, 'originalAmount' | 'originalCurrency'>> & {
+    role: 'main' | 'from' | 'to';
+  };
 
 export async function toDtos(db: DB, userId: string, rows: TxRow[]): Promise<TransactionDto[]> {
   if (rows.length === 0) return [];
@@ -59,7 +61,8 @@ export async function planLegs(c: C, input: TransactionInput, storedExtra: Recor
   const { db } = c.var.deps;
   const userId = c.var.user.id;
   const extra = applyExtra(c.var.deps, 'transaction', storedExtra, input.extra);
-  const common = { occurredAt: input.occurredAt, note: input.note ?? null, counterparty: input.counterparty ?? null, extra };
+  // Set explicitly so an edit that drops the foreign amount clears it.
+  const common = { occurredAt: input.occurredAt, note: input.note ?? null, counterparty: input.counterparty ?? null, extra, originalAmount: null, originalCurrency: null };
 
   if (input.type === 'transfer') {
     const from = await ownAccount(db, userId, input.fromAccountId);
@@ -75,7 +78,8 @@ export async function planLegs(c: C, input: TransactionInput, storedExtra: Recor
       }
       toAmount = input.amount;
     } else if (toAmount === null) {
-      fail(400, `received amount in ${toCurrency} is required for a cross-currency transfer`, 'TO_AMOUNT_REQUIRED');
+      // Left blank: what arrives at the current rate.
+      toAmount = await convertNow(c.var.deps, input.amount, fromCurrency, toCurrency, 'TO_AMOUNT_REQUIRED');
     }
     const categoryId = input.categoryId ? (await ownCategory(db, userId, input.categoryId)).id : null;
     return [
@@ -101,8 +105,21 @@ export async function planLegs(c: C, input: TransactionInput, storedExtra: Recor
     if (cat.kind !== input.type) fail(400, `category is not an ${input.type} category`, 'CATEGORY_KIND');
     categoryId = cat.id;
   }
-  const amount = input.type === 'income' ? input.amount : -input.amount;
-  return [{ ...common, role: 'main', type: input.type, accountId: acc.id, currency, cardId, categoryId, amount }];
+  // A charge in another currency (e.g. USD paid from a CNY-only wallet): keep what the merchant
+  // billed; the account's own amount is what was actually paid, or the current-rate conversion.
+  let paid = input.amount ?? null;
+  let original: { originalAmount: number; originalCurrency: string } | null = null;
+  if (input.originalCurrency && input.originalAmount) {
+    if (input.originalCurrency === currency) paid ??= input.originalAmount;
+    else {
+      assertCurrency(c.var.deps, input.originalCurrency);
+      original = { originalAmount: input.originalAmount, originalCurrency: input.originalCurrency };
+      paid ??= await convertNow(c.var.deps, input.originalAmount, input.originalCurrency, currency, 'AMOUNT_REQUIRED');
+    }
+  }
+  if (!paid) fail(400, 'amount required', 'AMOUNT_REQUIRED');
+  const amount = input.type === 'income' ? paid : -paid;
+  return [{ ...common, ...original, role: 'main', type: input.type, accountId: acc.id, currency, cardId, categoryId, amount }];
 }
 
 function legToValues(leg: Leg) {
@@ -191,6 +208,8 @@ export function legRows(userId: string, legs: Leg[], now: number, links: LegLink
   const group = legs.length > 1 ? newId() : null;
   return legs.map((leg) => ({
     ...legToValues(leg),
+    originalAmount: leg.originalAmount ?? null,
+    originalCurrency: leg.originalCurrency ?? null,
     id: newId(),
     userId,
     transferGroupId: group,

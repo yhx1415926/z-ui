@@ -66,3 +66,48 @@ export const CARD_THEMES = [
   'rose',
 ] as const;
 export type CardTheme = (typeof CARD_THEMES)[number];
+
+/** Credit card automatic repayment: the whole statement or its minimum payment. */
+export const AUTOPAY_MODES = ['full', 'min'] as const;
+export type AutopayMode = (typeof AUTOPAY_MODES)[number];
+
+/** Price alert: fires when the price reaches the target from below (above) or above (below). */
+export const ALERT_DIRECTIONS = ['above', 'below'] as const;
+export type AlertDirection = (typeof ALERT_DIRECTIONS)[number];
+
+/**
+ * Stored price histories (one sync fetches all five): 1d = intraday 5-minute closes,
+ * 5d = 30-minute, 1y = daily, 5y = weekly, max = monthly. The chart ranges are cut from them.
+ */
+export const CHART_SERIES = ['1d', '5d', '1y', '5y', 'max'] as const;
+export type ChartSeries = (typeof CHART_SERIES)[number];
+
+/** Chart ranges on the stocks page (Apple Stocks style) and the series each is cut from. */
+export const CHART_RANGES = ['1D', '1W', '1M', '3M', '6M', 'YTD', '1Y', '2Y', '5Y', '10Y', 'ALL'] as const;
+export type ChartRange = (typeof CHART_RANGES)[number];
+export const RANGE_SERIES: Record<ChartRange, ChartSeries> = {
+  '1D': '1d',
+  '1W': '5d',
+  '1M': '1y',
+  '3M': '1y',
+  '6M': '1y',
+  YTD: '1y',
+  '1Y': '1y',
+  '2Y': '5y',
+  '5Y': '5y',
+  '10Y': 'max',
+  ALL: 'max',
+};
+
+/** Email notification rules the user can switch on (see notify.ts). */
+export const NOTIFY_KINDS = [
+  'autopay_low',
+  'autopay_done',
+  'price_alert',
+  'bill_due',
+  'bill_overdue',
+  'statement_due',
+  'over_limit',
+  'card_expiry',
+] as const;
+export type NotifyKind = (typeof NOTIFY_KINDS)[number];

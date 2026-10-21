@@ -7,7 +7,7 @@ import { useSearchParams } from 'react-router';
 import { HIDDEN_TAG, TRANSACTION_TYPES, type TransactionDto } from '@z-ui/shared';
 import { useConfig, useTransactions, type TxFilters } from '../api/hooks.ts';
 import { useCustomColumns } from '../components/CustomFields.tsx';
-import { MoneyText } from '../components/Money.tsx';
+import { MoneyText, OriginalAmount } from '../components/Money.tsx';
 import { TransactionModal } from '../components/TransactionModal.tsx';
 import { PageTop } from '../layouts/PanelLayout.tsx';
 import { useAccountOptions, useLookups } from '../lib/format.ts';
@@ -114,7 +114,12 @@ export function TransactionsPage() {
       key: 'amount',
       title: t('common.amount'),
       align: 'right',
-      render: (_, tx) => <MoneyText minor={tx.amount} currency={tx.currency} signed colored style={{ fontWeight: 600, whiteSpace: 'nowrap' }} />,
+      render: (_, tx) => (
+        <>
+          <MoneyText minor={tx.amount} currency={tx.currency} signed colored style={{ fontWeight: 600, whiteSpace: 'nowrap' }} />
+          <OriginalAmount tx={tx} />
+        </>
+      ),
     },
   ];
 

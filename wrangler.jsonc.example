@@ -22,7 +22,7 @@
 		{
 			"binding": "DB",
 			"database_name": "z-ui",
-			"database_id": "xxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxx",
+			"database_id": "a61eb056-8696-4d17-b1f1-de5edc5b94b0",
 			"migrations_dir": "apps/api/src/db/migrations"
 		}
 	],
@@ -44,6 +44,20 @@
 			"custom_domain": true
 		}
 	],
+	// Scheduled jobs (free plan): daily 01:00 UTC = 09:00 China time (automatic credit card
+	// repayments + notification emails), and every 30 min during US market hours (price alerts).
+	"triggers": {
+		"crons": [
+			"0 1 * * *",
+			"*/30 13-21 * * 1-5"
+		]
+	},
+	// Email notifications: first enable Email Routing on your domain and verify your private inbox
+	// as a destination address (Cloudflare dashboard → your domain → Email → Email Routing), then
+	// remove the // in front of the three lines below and deploy again.
+	//"send_email": [
+	//	{ "name": "MAILER" }
+	//],
 	// The *.workers.dev URL stays off so the only entrance is your (Access-protected) domain.
 	"workers_dev": false,
 	"preview_urls": false,

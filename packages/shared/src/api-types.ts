@@ -1,10 +1,14 @@
 import type { BinInfo, CardBrand, CardForm, CardFunding, CardStatus, LimitPeriod } from './card.ts';
 import type {
   AccountType,
+  AlertDirection,
+  AutopayMode,
   BillKind,
+  ChartSeries,
   CardTheme,
   CategoryKind,
   InstitutionType,
+  NotifyKind,
   OccurrenceStatus,
   Role,
   SessionMethod,
@@ -164,6 +168,12 @@ export interface CardDto {
   holderName: string | null;
   statementDay: number | null;
   dueDay: number | null;
+  /** Automatic repayment on the due date from this account (credit cards). */
+  autopayAccountId: string | null;
+  autopayCurrency: string | null;
+  autopayMode: AutopayMode | null;
+  /** Statements due before this day are not repaid automatically. */
+  autopaySince: string | null;
   theme: CardTheme;
   note: string | null;
   extra: Record<string, unknown>;
@@ -209,6 +219,9 @@ export interface TransactionDto {
   counterpartCurrency: string | null;
   billOccurrenceId: string | null;
   statementId: string | null;
+  /** Foreign-currency charge: what the merchant billed (amount is what the account paid). */
+  originalAmount: number | null;
+  originalCurrency: string | null;
   tagIds: string[];
   extra: Record<string, unknown>;
   createdAt: number;
@@ -280,12 +293,14 @@ export interface StatementDto {
   paidAmount: number;
   remaining: number;
   status: 'unpaid' | 'partial' | 'paid';
+  /** When the card's automatic repayment was recorded for this statement. */
+  autopayAt: number | null;
   note: string | null;
   createdAt: number;
   updatedAt: number;
 }
 
-export type ReminderKind = 'bill' | 'statement' | 'card_due' | 'card_expiry' | 'over_limit';
+export type ReminderKind = 'bill' | 'statement' | 'card_due' | 'card_expiry' | 'over_limit' | 'autopay_low' | 'price_alert';
 
 export interface ReminderDto {
   key: string;
@@ -456,4 +471,99 @@ export interface PriceSyncDto extends InvestDto {
   failed: QuoteProblem[];
   /** Holdings not refreshed this time (more than 30); press sync again. */
   remaining: number;
+}
+
+/** A watchlist row: last price, the previous close (day's change) and the intraday sparkline. */
+export interface WatchItemDto {
+  symbol: string;
+  name: string | null;
+  price: string | null;
+  priceAt: number | null;
+  prevClose: string | null;
+  /** Intraday [unix seconds, close] points from the last sync (empty before the first). */
+  spark: [number, number][];
+  /** Active price alerts on this symbol. */
+  alerts: number;
+}
+
+export interface WatchSyncDto {
+  items: WatchItemDto[];
+  updated: number;
+  failed: QuoteProblem[];
+  /** Symbols not refreshed this time (over the per-request limit); press sync again. */
+  remaining: number;
+}
+
+export interface ChartSeriesDto {
+  series: ChartSeries;
+  points: [number, number][];
+  prevClose: number | null;
+  syncedAt: number;
+}
+
+export interface ChartDto {
+  symbol: string;
+  name: string | null;
+  price: string | null;
+  priceAt: number | null;
+  /** The stored series (missing ones were never synced). */
+  series: ChartSeriesDto[];
+}
+
+export interface PriceAlertDto {
+  id: string;
+  symbol: string;
+  direction: AlertDirection;
+  target: string;
+  active: boolean;
+  triggeredAt: number | null;
+  triggeredPrice: string | null;
+  note: string | null;
+  createdAt: number;
+}
+
+export interface NotifyRule {
+  enabled: boolean;
+  /** How many days ahead to warn (kinds with a due date). */
+  daysBefore: number;
+  /** Templates with {{variables}} (see NOTIFY_VARS). */
+  subject: string;
+  body: string;
+}
+
+export interface NotifySettings {
+  /** Master switch. */
+  enabled: boolean;
+  /** Your private address (must be a verified destination address in Cloudflare Email Routing). */
+  to: string;
+  /** Sender on your own domain, e.g. z-ui@example.com. */
+  from: string;
+  fromName: string;
+  rules: Record<NotifyKind, NotifyRule>;
+}
+
+export interface NotificationLogDto {
+  id: string;
+  kind: string;
+  key: string;
+  subject: string;
+  ok: boolean;
+  error: string | null;
+  sentAt: number;
+}
+
+export interface NotifyDto {
+  settings: NotifySettings;
+  /** The server can send mail (Cloudflare send_email binding present). */
+  mailer: boolean;
+  log: NotificationLogDto[];
+}
+
+export interface NotifyRunDto {
+  /** Events found (before de-duplication). */
+  events: number;
+  sent: number;
+  failed: number;
+  /** Automatic repayments recorded by this run. */
+  autopaid: number;
 }

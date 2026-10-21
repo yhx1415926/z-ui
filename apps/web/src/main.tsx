@@ -25,6 +25,7 @@ const SecurityPage = lazy(() => import('./pages/SecurityPage.tsx').then((m) => (
 const StatsPage = lazy(() => import('./pages/StatsPage.tsx').then((m) => ({ default: m.StatsPage })));
 const InvestPage = lazy(() => import('./pages/InvestPage.tsx').then((m) => ({ default: m.InvestPage })));
 const FxPage = lazy(() => import('./pages/FxPage.tsx').then((m) => ({ default: m.FxPage })));
+const NotifyPage = lazy(() => import('./pages/NotifyPage.tsx').then((m) => ({ default: m.NotifyPage })));
 
 const standalone = (node: ReactNode) => <Suspense fallback={<FullPageSpin />}>{node}</Suspense>;
 
@@ -55,6 +56,7 @@ const router = createBrowserRouter([
       { path: 'invest', element: <InvestPage /> },
       { path: 'stats', element: <StatsPage /> },
       { path: 'fx', element: <FxPage /> },
+      { path: 'notify', element: <NotifyPage /> },
       { path: '*', element: <Navigate to="/" replace /> },
     ],
   },

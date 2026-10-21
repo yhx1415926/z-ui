@@ -9,18 +9,22 @@ import type {
   BillOccurrenceDto,
   CardDto,
   CategoryDto,
+  ChartDto,
   DashboardDto,
   FxDto,
   InstitutionDto,
   InvestDto,
   MeDto,
+  NotifyDto,
   PasskeyDto,
+  PriceAlertDto,
   ReminderDto,
   SessionDto,
   StatementDto,
   StatsDto,
   TagDto,
   TransactionListDto,
+  WatchItemDto,
 } from '@z-ui/shared';
 import { ApiError, get, qs } from './client.ts';
 
@@ -101,13 +105,18 @@ export const useSessions = () => useQuery({ queryKey: ['sessions'], queryFn: () 
 export const useAudit = () => useQuery({ queryKey: ['audit'], queryFn: () => get<AuditDto[]>('/auth/audit') });
 export const useFx = () => useQuery({ queryKey: ['fx'], queryFn: () => get<FxDto>('/fx') });
 export const useInvest = () => useQuery({ queryKey: ['invest'], queryFn: () => get<InvestDto>('/invest') });
+export const useWatchlist = () => useQuery({ queryKey: ['watch'], queryFn: () => get<WatchItemDto[]>('/watch') });
+export const useChart = (symbol: string | null) =>
+  useQuery({ queryKey: ['chart', symbol], queryFn: () => get<ChartDto>(`/watch/chart/${symbol}`), enabled: !!symbol, staleTime: 300_000 });
+export const useAlerts = () => useQuery({ queryKey: ['alerts'], queryFn: () => get<PriceAlertDto[]>('/watch/alerts') });
+export const useNotify = () => useQuery({ queryKey: ['notify'], queryFn: () => get<NotifyDto>('/notify') });
 
 export const useRecoveryCount = () =>
   useQuery({ queryKey: ['recovery'], queryFn: () => get<{ remaining: number }>('/auth/recovery-codes') });
 
 /** Ledger data is interconnected (balances, dashboard, reminders), so mutations refresh it all. */
 export function invalidateLedger(qc: QueryClient) {
-  return qc.invalidateQueries({ predicate: (q) => !['me', 'config', 'passkeys', 'sessions', 'audit', 'bin', 'bin-meta'].includes(q.queryKey[0] as string) });
+  return qc.invalidateQueries({ predicate: (q) => !['me', 'config', 'passkeys', 'sessions', 'audit', 'bin', 'bin-meta', 'chart', 'notify'].includes(q.queryKey[0] as string) });
 }
 
 /** Mutation with toast feedback and ledger refresh. */

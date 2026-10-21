@@ -52,6 +52,17 @@ export function MoneyText({
   );
 }
 
+/** "≈ US$20.00" under an amount paid in another currency (foreign-currency charge). */
+export function OriginalAmount({ tx }: { tx: { originalAmount: number | null; originalCurrency: string | null } }) {
+  const money = useMoney();
+  if (tx.originalAmount === null || !tx.originalCurrency) return null;
+  return (
+    <div className="muted num" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+      {money(tx.originalAmount, tx.originalCurrency)}
+    </div>
+  );
+}
+
 /**
  * Amount input bound to integer minor units. Uses string mode so 0.1 + 0.2 style float
  * errors never reach the stored value.

@@ -3,6 +3,8 @@ import { CARD_BRANDS, CARD_FORMS, CARD_FUNDING, CARD_STATUSES, LIMIT_PERIODS } f
 import { isIsoDate } from './date.ts';
 import {
   ACCOUNT_TYPES,
+  ALERT_DIRECTIONS,
+  AUTOPAY_MODES,
   BILL_KINDS,
   CARD_THEMES,
   CATEGORY_KINDS,
@@ -178,6 +180,11 @@ const cardFields = {
   holderName: optText(64),
   statementDay: dayOfMonth,
   dueDay: dayOfMonth,
+  /** Credit cards: account the bank debits on the due date (null = no automatic repayment). */
+  autopayAccountId: idSchema.nullish(),
+  /** Currency debited from that account (default: the statement's if held, else its primary). */
+  autopayCurrency: currencyCodeSchema.nullish(),
+  autopayMode: z.enum(AUTOPAY_MODES).nullish(),
   theme: z.enum(CARD_THEMES).default('midnight'),
   note: optText(2000),
   extra: extraSchema.optional(),
@@ -211,17 +218,26 @@ const txCommon = {
 };
 
 export const transactionSchema = z.discriminatedUnion('type', [
-  z.object({
-    type: z.enum(['income', 'expense']),
-    accountId: idSchema,
-    /** One of the account's currencies; defaults to its primary currency. */
-    currency: currencyCodeSchema.nullish(),
-    cardId: idSchema.nullish(),
-    categoryId: idSchema.nullish(),
-    /** Positive; the sign is derived from the type. */
-    amount: positiveMinorSchema,
-    ...txCommon,
-  }),
+  z
+    .object({
+      type: z.enum(['income', 'expense']),
+      accountId: idSchema,
+      /** One of the account's currencies; defaults to its primary currency. */
+      currency: currencyCodeSchema.nullish(),
+      cardId: idSchema.nullish(),
+      categoryId: idSchema.nullish(),
+      /**
+       * Positive; the sign is derived from the type. What the account actually paid/received.
+       * May be left out for a foreign-currency charge: it is then converted from the original
+       * amount with the current FX rates.
+       */
+      amount: positiveMinorSchema.nullish(),
+      /** Foreign-currency charge, e.g. USD 20.00 paid from a CNY-only wallet. */
+      originalCurrency: currencyCodeSchema.nullish(),
+      originalAmount: positiveMinorSchema.nullish(),
+      ...txCommon,
+    })
+    .refine((v) => v.amount || (v.originalAmount && v.originalCurrency), { message: 'amount required', path: ['amount'] }),
   z.object({
     type: z.literal('adjustment'),
     accountId: idSchema,
@@ -240,7 +256,10 @@ export const transactionSchema = z.discriminatedUnion('type', [
     toCurrency: currencyCodeSchema.nullish(),
     /** Amount leaving the source account (source currency). */
     amount: positiveMinorSchema,
-    /** Amount arriving (destination currency). Required when the currencies differ. */
+    /**
+     * Amount arriving (destination currency). For a cross-currency transfer left out, it is
+     * converted with the current FX rates.
+     */
     toAmount: positiveMinorSchema.nullish(),
     categoryId: idSchema.nullish(),
     ...txCommon,
@@ -295,6 +314,7 @@ export const payOccurrenceSchema = z.object({
   /** Currency of the account debited (one of its currencies). */
   currency: currencyCodeSchema.nullish(),
   cardId: idSchema.nullish(),
+  /** Amount charged in `currency`; when that differs from the bill's and this is left out, the current FX rate is used. */
   amount: positiveMinorSchema.nullish(),
   occurredAt: isoDateSchema.nullish(),
   note: optText(2000),
@@ -368,6 +388,22 @@ export const tradeSchema = z
   .refine((t) => t.price || t.amount, { message: 'price or amount required', path: ['price'] });
 
 export const priceSchema = z.object({ price: decimal6Schema });
+
+export const watchAddSchema = z.object({ symbol: stockSymbolSchema });
+/** New watchlist order (symbols not listed keep their place after these). */
+export const watchOrderSchema = z.object({ symbols: z.array(stockSymbolSchema).max(200) });
+
+export const priceAlertSchema = z.object({
+  symbol: stockSymbolSchema,
+  direction: z.enum(ALERT_DIRECTIONS),
+  /** Target price in USD, up to 6 decimals. */
+  target: decimal6Schema,
+  note: optText(200),
+});
+export const priceAlertPatchSchema = priceAlertSchema.partial().extend({
+  /** true re-arms a triggered alert. */
+  active: z.boolean().optional(),
+});
 
 /** Correct a ticker on every trade, e.g. APPL → AAPL. */
 export const symbolRenameSchema = z.object({ to: stockSymbolSchema });

@@ -6,6 +6,7 @@ import type { AppBindings, Deps } from '../env.ts';
 import { body, fail, notFound } from '../lib/http.ts';
 import { inChunks } from '../lib/chunks.ts';
 import { newId } from '../lib/id.ts';
+import { runAutopay } from '../lib/autopay.ts';
 import { accountCurrency, defined, ownAccount, ownCard, runBatch } from '../lib/ledger.ts';
 import { insertLegOps, planLegs, toDtos } from './transactions.ts';
 
@@ -54,6 +55,8 @@ async function ownStatement(deps: Deps, userId: string, id: string) {
 
 export const statementRoutes = new Hono<AppBindings>()
   .get('/', async (c) => {
+    // Automatic repayments due by today are recorded before listing.
+    await runAutopay(c.var.deps, c.var.user.id);
     const cardId = c.req.query('cardId');
     const where = cardId
       ? and(eq(creditStatements.userId, c.var.user.id), eq(creditStatements.cardId, cardId))
@@ -82,6 +85,7 @@ export const statementRoutes = new Hono<AppBindings>()
       statementAmount: input.statementAmount,
       minPayment: input.minPayment ?? null,
       note: input.note ?? null,
+      autopayAt: null,
       createdAt: t,
       updatedAt: t,
     };

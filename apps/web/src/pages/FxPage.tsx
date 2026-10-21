@@ -1,12 +1,12 @@
-import { DeleteOutlined, EditOutlined, SyncOutlined } from '@ant-design/icons';
-import { App, Alert, Button, Card, Form, InputNumber, Modal, Popconfirm, Space, Table, Tag, Tooltip } from 'antd';
+import { DeleteOutlined, EditOutlined, SwapOutlined, SyncOutlined } from '@ant-design/icons';
+import { App, Alert, Button, Card, Form, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip } from 'antd';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { FxDto } from '@z-ui/shared';
+import { summaryCurrency, toMinor, type FxDto } from '@z-ui/shared';
 import { del, post, put } from '../api/client.ts';
 import { useAction, useConfig, useFx } from '../api/hooks.ts';
 import { PageTop } from '../layouts/PanelLayout.tsx';
-import { useLocale } from '../lib/format.ts';
+import { useDecimals, useLocale, useMoney } from '../lib/format.ts';
 
 interface Row {
   currency: string;
@@ -14,6 +14,79 @@ interface Row {
   perUsd: number | null;
   asOf: string | null;
   source: string | null;
+}
+
+const PAIR_KEY = 'zui-fx-pair';
+
+function readPair(): { from: string; to: string } | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(PAIR_KEY) ?? 'null') as { from?: unknown; to?: unknown } | null;
+    return v && typeof v.from === 'string' && typeof v.to === 'string' ? { from: v.from, to: v.to } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Two-currency calculator over the stored rates (the last pair is remembered per browser). */
+function Converter({ rows }: { rows: Row[] }) {
+  const { t } = useTranslation();
+  const money = useMoney();
+  const decimals = useDecimals();
+  const locale = useLocale();
+  const { data: cfg } = useConfig();
+  const [pair, setPairState] = useState(() => readPair() ?? { from: 'USD', to: cfg ? summaryCurrency(cfg) : 'CNY' });
+  const [amount, setAmount] = useState<string | null>('100');
+  const setPair = (next: { from: string; to: string }) => {
+    setPairState(next);
+    try {
+      localStorage.setItem(PAIR_KEY, JSON.stringify(next));
+    } catch {
+      /* private mode: this visit only */
+    }
+  };
+
+  const perUsd = (code: string) => (code === 'USD' ? 1 : (rows.find((r) => r.currency === code)?.perUsd ?? null));
+  const a = perUsd(pair.from);
+  const b = perUsd(pair.to);
+  const rate = a && b ? b / a : null;
+  const value = amount && rate !== null ? Number(amount) * rate : null;
+  const options = rows.map((r) => ({ value: r.currency, label: `${r.currency} · ${r.name}` }));
+  const nf = (n: number) => new Intl.NumberFormat(locale, { maximumSignificantDigits: 6 }).format(n);
+  const asOf = [rows.find((r) => r.currency === pair.from)?.asOf, rows.find((r) => r.currency === pair.to)?.asOf].filter(Boolean).sort()[0];
+
+  return (
+    <Card title={t('fx.converter')} style={{ marginBottom: 16 }}>
+      <div className="fx-converter">
+        <div className="fx-side">
+          <Select value={pair.from} options={options} onChange={(from) => setPair({ ...pair, from })} showSearch={{ optionFilterProp: 'label' }} aria-label={t('fx.from')} />
+          <InputNumber<string>
+            stringMode
+            min="0"
+            value={amount}
+            onChange={setAmount}
+            precision={decimals(pair.from)}
+            size="large"
+            style={{ width: '100%' }}
+            aria-label={t('common.amount')}
+          />
+        </div>
+        <Tooltip title={t('fx.swap')}>
+          <Button shape="circle" icon={<SwapOutlined />} aria-label={t('fx.swap')} onClick={() => setPair({ from: pair.to, to: pair.from })} className="fx-swap" />
+        </Tooltip>
+        <div className="fx-side">
+          <Select value={pair.to} options={options} onChange={(to) => setPair({ ...pair, to })} showSearch={{ optionFilterProp: 'label' }} aria-label={t('fx.to')} />
+          <div className="fx-result num" aria-live="polite">
+            {value === null ? <span className="muted">—</span> : money(toMinor(value.toFixed(decimals(pair.to)), decimals(pair.to)) ?? 0, pair.to)}
+          </div>
+        </div>
+      </div>
+      <div className="muted num" style={{ marginTop: 10, fontSize: 13 }}>
+        {rate === null
+          ? t('fx.noRateFor', { list: [pair.from, pair.to].filter((c) => perUsd(c) === null).join(', ') })
+          : `1 ${pair.from} = ${nf(rate)} ${pair.to} · 1 ${pair.to} = ${nf(1 / rate)} ${pair.from}${asOf ? ` · ${t('fx.asOf', { date: asOf })}` : ''}`}
+      </div>
+    </Card>
+  );
 }
 
 export function FxPage() {
@@ -72,6 +145,7 @@ export function FxPage() {
         }
       />
       <Alert type="info" showIcon message={t('fx.hint')} style={{ marginBottom: 16 }} />
+      <Converter rows={rows} />
       <Card
         title={
           <span>

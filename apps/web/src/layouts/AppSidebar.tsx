@@ -8,6 +8,7 @@ import {
   FundOutlined,
   GlobalOutlined,
   LogoutOutlined,
+  MailOutlined,
   MenuOutlined,
   PushpinFilled,
   PushpinOutlined,
@@ -69,6 +70,7 @@ export function AppSidebar() {
   );
   const utility: MenuProps['items'] = useMemo(
     () => [
+      { key: '/notify', icon: <MailOutlined />, label: t('nav.notify') },
       { key: '/settings', icon: <SettingOutlined />, label: t('nav.settings') },
       { key: '/security', icon: <SafetyOutlined />, label: t('nav.security') },
       { key: 'logout', icon: <LogoutOutlined />, label: t('nav.logout'), danger: true },

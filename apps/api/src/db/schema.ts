@@ -251,6 +251,15 @@ export const cards = sqliteTable(
     note: text('note'),
     extra: json('extra'),
     archived: bool('archived').notNull().default(false),
+    /**
+     * Credit cards: account the bank debits on the due date (lib/autopay.ts records the
+     * repayment), in autopayCurrency; full statement or the minimum payment. Statements due
+     * before autopaySince (the day it was set up) are left alone.
+     */
+    autopayAccountId: text('autopay_account_id'),
+    autopayCurrency: text('autopay_currency'),
+    autopayMode: text('autopay_mode', { enum: ['full', 'min'] }),
+    autopaySince: text('autopay_since'),
     createdAt: ts('created_at'),
     updatedAt: ts('updated_at'),
   },
@@ -313,6 +322,12 @@ export const transactions = sqliteTable(
     billOccurrenceId: text('bill_occurrence_id'),
     /** Credit card statement this repayment is applied to. */
     statementId: text('statement_id'),
+    /**
+     * Foreign-currency charge (e.g. a USD subscription paid from a CNY-only wallet): what the
+     * merchant billed. `amount` stays what the account actually paid, in its own currency.
+     */
+    originalAmount: integer('original_amount'),
+    originalCurrency: text('original_currency'),
     extra: json('extra'),
     createdAt: ts('created_at'),
     updatedAt: ts('updated_at'),
@@ -407,6 +422,8 @@ export const creditStatements = sqliteTable(
     statementAmount: integer('statement_amount').notNull(),
     minPayment: integer('min_payment'),
     note: text('note'),
+    /** When the automatic repayment ran for this statement (once per statement). */
+    autopayAt: integer('autopay_at'),
     createdAt: ts('created_at'),
     updatedAt: ts('updated_at'),
   },
@@ -450,6 +467,8 @@ export const securities = sqliteTable('securities', {
   currency: text('currency').notNull().default('USD'),
   priceMicros: integer('price_micros'),
   priceAt: integer('price_at'),
+  /** Previous session's close, for the day's change on the watchlist. */
+  prevCloseMicros: integer('prev_close_micros'),
   source: text('source'),
   updatedAt: ts('updated_at'),
 });
@@ -482,4 +501,73 @@ export const trades = sqliteTable(
     updatedAt: ts('updated_at'),
   },
   (t) => [index('trades_user_idx').on(t.userId, t.symbol, t.tradeDate)],
+);
+
+/** Symbols on the user's watchlist (stocks page), in display order. */
+export const watchlist = sqliteTable(
+  'watchlist',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    symbol: text('symbol').notNull(),
+    sort: integer('sort').notNull().default(0),
+    createdAt: ts('created_at'),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.symbol] })],
+);
+
+/**
+ * Price history for the charts, one row per symbol and series (1d = intraday 5 min, 5d = 30 min,
+ * 1y = daily, 5y = weekly, max = monthly), synced manually. points = [[unix seconds, close], …].
+ */
+export const priceSeries = sqliteTable(
+  'price_series',
+  {
+    symbol: text('symbol').notNull(),
+    series: text('series', { enum: ['1d', '5d', '1y', '5y', 'max'] }).notNull(),
+    points: text('points', { mode: 'json' }).$type<[number, number][]>().notNull(),
+    prevCloseMicros: integer('prev_close_micros'),
+    syncedAt: ts('synced_at'),
+  },
+  (t) => [primaryKey({ columns: [t.symbol, t.series] })],
+);
+
+/** "Tell me when AAPL goes above/below X". Fires once (active → false, triggered_at set). */
+export const priceAlerts = sqliteTable(
+  'price_alerts',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    symbol: text('symbol').notNull(),
+    direction: text('direction', { enum: ['above', 'below'] }).notNull(),
+    targetMicros: integer('target_micros').notNull(),
+    active: bool('active').notNull().default(true),
+    triggeredAt: integer('triggered_at'),
+    triggeredPriceMicros: integer('triggered_price_micros'),
+    note: text('note'),
+    createdAt: ts('created_at'),
+    updatedAt: ts('updated_at'),
+  },
+  (t) => [index('price_alerts_user_idx').on(t.userId, t.symbol)],
+);
+
+/** Emails sent (or attempted) by the notification rules; `key` makes each event send once. */
+export const notificationLog = sqliteTable(
+  'notification_log',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
+    kind: text('kind').notNull(),
+    subject: text('subject').notNull(),
+    ok: bool('ok').notNull(),
+    error: text('error'),
+    sentAt: ts('sent_at'),
+  },
+  (t) => [uniqueIndex('notify_log_key_uq').on(t.userId, t.key), index('notify_log_user_idx').on(t.userId, t.sentAt)],
 );

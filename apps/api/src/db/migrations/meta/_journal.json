@@ -29,6 +29,13 @@
       "when": 1792253009296,
       "tag": "0003_balance_date",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1792592270908,
+      "tag": "0004_autopay_notify_watchlist",
+      "breakpoints": true
     }
   ]
 }

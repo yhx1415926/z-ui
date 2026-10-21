@@ -1,6 +1,7 @@
 import type { ConfigStore } from './config/store.ts';
 import type { DB } from './db/client.ts';
 import type * as schema from './db/schema.ts';
+import type { Mailer } from './lib/mail.ts';
 
 export interface AppEnv {
   /** 32-byte key (base64) for encrypting card numbers and TOTP secrets. Back it up! */
@@ -36,6 +37,8 @@ export interface Deps {
   limiter?: (key: string) => Promise<boolean>;
   /** Outbound HTTP (FX rates, stock quotes); replaceable in tests. */
   fetch?: typeof fetch;
+  /** Sends notification mails (Cloudflare send_email binding); absent = mail is off. */
+  mailer?: Mailer;
 }
 
 export type AppBindings = {

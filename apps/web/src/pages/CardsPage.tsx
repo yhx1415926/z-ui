@@ -175,6 +175,13 @@ function CardDrawer({ card, onClose, onEdit, onBack }: { card: CardDto | null; o
                     ? [
                         { key: 'sd', label: t('card.statementDay'), children: card.statementDay ? t('card.dayN', { n: card.statementDay }) : '—' },
                         { key: 'dd', label: t('card.dueDay'), children: card.dueDay ? t('card.dayN', { n: card.dueDay }) : '—' },
+                        {
+                          key: 'autopay',
+                          label: t('autopay.title'),
+                          children: card.autopayAccountId
+                            ? `${L.accountLabel(card.autopayAccountId)}${card.autopayCurrency ? ` (${card.autopayCurrency})` : ''} · ${t(`autopay.modes.${card.autopayMode ?? 'full'}`)}`
+                            : t('autopay.off'),
+                        },
                       ]
                     : []),
                   { key: 'note', label: t('common.note'), children: card.note || '—' },

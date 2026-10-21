@@ -7,5 +7,6 @@ export * from './date.ts';
 export * from './decimal.ts';
 export * from './enums.ts';
 export * from './money.ts';
+export * from './notify.ts';
 export * from './recurrence.ts';
 export * from './schemas.ts';

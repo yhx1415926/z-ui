@@ -1,4 +1,4 @@
-import { DeleteOutlined, EditOutlined, PayCircleOutlined, PlusOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, PayCircleOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { App, Button, Card, Col, DatePicker, Empty, Form, Input, Modal, Progress, Row, Segmented, Select, Space, Table, Tag, type TableColumnsType } from 'antd';
 import dayjs, { type Dayjs } from 'dayjs';
 import { motion } from 'motion/react';
@@ -9,7 +9,7 @@ import { del, patch, post } from '../api/client.ts';
 import { useAction, useStatements } from '../api/hooks.ts';
 import { MoneyInput, MoneyText } from '../components/Money.tsx';
 import { PageTop } from '../layouts/PanelLayout.tsx';
-import { useAccountOptions, useLookups } from '../lib/format.ts';
+import { useAccountOptions, useFxConvert, useLookups } from '../lib/format.ts';
 
 const cardLabel = (c: CardDto) => `${c.nickname ?? c.brand.toUpperCase()} •••• ${c.last4}`;
 
@@ -141,11 +141,18 @@ function RepayModal({ statement, onClose }: { statement: StatementDto | null; on
   const fromCurrency = Form.useWatch('fromCurrency', form) ?? (statement && held.includes(statement.currency) ? statement.currency : from?.currency);
   const cross = !!fromCurrency && !!statement && fromCurrency !== statement.currency;
   const accountOptions = useAccountOptions();
+  const fx = useFxConvert();
   useEffect(() => {
     if (!statement) return;
     form.resetFields();
     form.setFieldsValue({ amount: statement.remaining, toAmount: statement.remaining, occurredAt: dayjs() });
   }, [statement, form]);
+  // Paying from another currency: what the remainder costs at the current rate (editable).
+  useEffect(() => {
+    if (!statement || !fromCurrency) return;
+    form.setFieldsValue(cross ? { amount: fx(statement.remaining, statement.currency, fromCurrency) ?? undefined, toAmount: statement.remaining } : { amount: statement.remaining });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cross, fromCurrency, statement]);
   const repay = useAction(async (v: { fromAccountId: string; amount: number; toAmount?: number; occurredAt: Dayjs; note?: string }) => {
     await post(`/statements/${statement!.id}/repay`, { ...v, fromCurrency, toAmount: cross ? v.toAmount : null, occurredAt: v.occurredAt.format('YYYY-MM-DD') });
     onClose();
@@ -172,7 +179,7 @@ function RepayModal({ statement, onClose }: { statement: StatementDto | null; on
           </Space.Compact>
         </Form.Item>
         {cross && (
-          <Form.Item name="toAmount" label={t('tx.toAmount')} rules={[{ required: true }]}>
+          <Form.Item name="toAmount" label={t('tx.toAmount')} extra={t('tx.toAmountHint')}>
             <MoneyInput currency={statement!.currency} />
           </Form.Item>
         )}
@@ -219,7 +226,20 @@ export function StatementsPage() {
         </div>
       ),
     },
-    { key: 'status', title: t('common.status'), render: (_, s) => <Tag color={STATUS_COLOR[s.status]}>{t(`statement.statuses.${s.status}`)}</Tag> },
+    {
+      key: 'status',
+      title: t('common.status'),
+      render: (_, s) => (
+        <Space size={4} wrap>
+          <Tag color={STATUS_COLOR[s.status]}>{t(`statement.statuses.${s.status}`)}</Tag>
+          {s.autopayAt && (
+            <Tag icon={<ThunderboltOutlined />} color="blue">
+              {t('autopay.done')}
+            </Tag>
+          )}
+        </Space>
+      ),
+    },
     {
       key: 'actions',
       title: '',
@@ -283,6 +303,11 @@ export function StatementsPage() {
                         </span>
                         {latest && <Tag color={STATUS_COLOR[latest.status]}>{latest.dueDate}</Tag>}
                       </div>
+                      {c.autopayAccountId && (
+                        <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                          <ThunderboltOutlined /> {t('autopay.from', { account: L.accountLabel(c.autopayAccountId) })} · {t(`autopay.modes.${c.autopayMode ?? 'full'}`)}
+                        </div>
+                      )}
                     </Card>
                   </motion.div>
                 </Col>

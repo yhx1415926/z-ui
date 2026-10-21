@@ -1,4 +1,14 @@
-import { BellOutlined, CloseOutlined, CreditCardOutlined, ExclamationCircleOutlined, FieldTimeOutlined, ScheduleOutlined, WarningOutlined } from '@ant-design/icons';
+import {
+  BellOutlined,
+  CloseOutlined,
+  CreditCardOutlined,
+  ExclamationCircleOutlined,
+  FieldTimeOutlined,
+  RiseOutlined,
+  ScheduleOutlined,
+  ThunderboltOutlined,
+  WarningOutlined,
+} from '@ant-design/icons';
 import { Badge, Button, Empty, Popover, Tag, Tooltip } from 'antd';
 import { AnimatePresence, motion } from 'motion/react';
 import type { ReactNode } from 'react';
@@ -15,6 +25,8 @@ const ICONS: Record<ReminderKind, ReactNode> = {
   card_due: <FieldTimeOutlined />,
   card_expiry: <WarningOutlined />,
   over_limit: <ExclamationCircleOutlined />,
+  autopay_low: <ThunderboltOutlined />,
+  price_alert: <RiseOutlined />,
 };
 
 export const SEVERITY_COLOR = { overdue: 'red', soon: 'orange', upcoming: 'blue' } as const;
@@ -33,7 +45,15 @@ export function ReminderList({ items, compact = false }: { items: ReminderDto[];
   const dismiss = useAction((key: string) => post('/reminders/dismiss', { key }), { success: false, invalidate: ['reminders'] });
   if (items.length === 0) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('reminders.empty')} />;
   const target = (r: ReminderDto) =>
-    r.kind === 'bill' ? '/bills' : r.kind === 'card_expiry' ? '/cards' : r.kind === 'over_limit' ? `/accounts?account=${r.refId}` : '/statements';
+    r.kind === 'bill'
+      ? '/bills'
+      : r.kind === 'card_expiry'
+        ? '/cards'
+        : r.kind === 'over_limit'
+          ? `/accounts?account=${r.refId}`
+          : r.kind === 'price_alert'
+            ? `/invest?tab=watch&symbol=${r.refId}`
+            : '/statements';
   return (
     <div>
       <AnimatePresence initial={false}>
@@ -58,7 +78,7 @@ export function ReminderList({ items, compact = false }: { items: ReminderDto[];
               <div style={{ textAlign: 'right' }}>
                 {r.amount !== null && r.currency && <div className="num" style={{ fontWeight: 500 }}>{money(r.amount, r.currency)}</div>}
                 <Tag color={SEVERITY_COLOR[r.severity]} style={{ marginInlineEnd: 0 }}>
-                  {r.kind === 'over_limit' ? t('reminders.overTag') : due(r)}
+                  {r.kind === 'over_limit' ? t('reminders.overTag') : r.kind === 'price_alert' ? t('reminders.firedTag') : due(r)}
                 </Tag>
               </div>
               {!compact && (

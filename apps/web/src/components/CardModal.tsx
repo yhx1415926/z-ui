@@ -1,8 +1,9 @@
 import { CheckCircleFilled } from '@ant-design/icons';
 import { Checkbox, Col, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Tag } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  AUTOPAY_MODES,
   BRAND_META,
   CARD_BRANDS,
   CARD_FUNDING,
@@ -17,6 +18,8 @@ import {
   normalizePan,
   panInputState,
   parseExpiry,
+  type AccountDto,
+  type AutopayMode,
   type CardBrand,
   type CardDto,
   type CardForm,
@@ -50,6 +53,9 @@ interface CardFormValues {
   nickname?: string;
   statementDay?: number | null;
   dueDay?: number | null;
+  autopayAccountId?: string | null;
+  autopayCurrency?: string | null;
+  autopayMode?: AutopayMode | null;
   spendLimit?: number | null;
   limitPeriod?: LimitPeriod | null;
   singleUse?: boolean;
@@ -121,9 +127,10 @@ export function CardModal({
         merchant: editing.merchant ?? undefined,
         note: editing.note ?? undefined,
         expiry: editing.expMonth && editing.expYear ? `${twoDigits(editing.expMonth)} / ${twoDigits(editing.expYear % 100)}` : '',
+        autopayMode: editing.autopayMode ?? 'full',
       });
     } else {
-      form.setFieldsValue({ accountId: defaultAccountId, form: defaultForm, status: 'active', panMode: 'full', funding: 'debit', theme: 'midnight', limitPeriod: 'month', extra: {} });
+      form.setFieldsValue({ accountId: defaultAccountId, form: defaultForm, status: 'active', panMode: 'full', funding: 'debit', theme: 'midnight', limitPeriod: 'month', autopayMode: 'full', extra: {} });
     }
   }, [open, editing, defaultAccountId, defaultForm, form]);
 
@@ -134,6 +141,10 @@ export function CardModal({
     mode === 'full' && pan.digits ? pan.brand : (v?.brand ?? (v?.bin ? detectBrand(v.bin) : (editing?.brand ?? 'other')));
   const account = v?.accountId ? L.acc.get(v.accountId) : undefined;
   const expiry = parseExpiry(v?.expiry ?? '');
+  // Automatic repayment comes from another account than the card's own.
+  const notOwn = useCallback((a: AccountDto) => a.id !== v?.accountId, [v?.accountId]);
+  const autopayOptions = useAccountOptions(notOwn);
+  const autopayAccount = v?.autopayAccountId ? L.acc.get(v.autopayAccountId) : undefined;
   const parentOptions = useMemo(() => {
     const physical = L.cards.filter((c) => c.form === 'physical' && c.status !== 'closed' && c.id !== editing?.id);
     const sameAccount = physical.filter((c) => c.accountId === v?.accountId);
@@ -158,6 +169,9 @@ export function CardModal({
       expYear: exp?.year ?? null,
       statementDay: f.funding === 'credit' ? (f.statementDay ?? null) : null,
       dueDay: f.funding === 'credit' ? (f.dueDay ?? null) : null,
+      autopayAccountId: f.funding === 'credit' ? (f.autopayAccountId ?? null) : null,
+      autopayCurrency: f.funding === 'credit' && f.autopayAccountId ? (f.autopayCurrency ?? null) : null,
+      autopayMode: f.funding === 'credit' && f.autopayAccountId ? (f.autopayMode ?? 'full') : null,
       theme: f.theme,
       note: f.note || null,
       extra: f.extra ?? {},
@@ -340,6 +354,38 @@ export function CardModal({
               </Form.Item>
             </Col>
           </Row>
+        )}
+        {v?.funding === 'credit' && (
+          <>
+            <Form.Item label={t('autopay.title')} htmlFor="autopayAccountId" extra={t('autopay.hint')} style={{ marginBottom: v.autopayAccountId ? 8 : undefined }}>
+              <Space.Compact block>
+                <Form.Item name="autopayAccountId" noStyle>
+                  <Select
+                    allowClear
+                    placeholder={t('autopay.off')}
+                    options={autopayOptions}
+                    showSearch={{ optionFilterProp: 'label' }}
+                    onChange={() => form.setFieldValue('autopayCurrency', null)}
+                  />
+                </Form.Item>
+                {autopayAccount && autopayAccount.currencies.length > 1 && (
+                  <Form.Item name="autopayCurrency" noStyle>
+                    <Select
+                      style={{ width: 120, flex: '0 0 auto' }}
+                      allowClear
+                      placeholder={t('autopay.autoCurrency')}
+                      options={autopayAccount.currencies.map((c) => ({ value: c.currency, label: c.currency }))}
+                    />
+                  </Form.Item>
+                )}
+              </Space.Compact>
+            </Form.Item>
+            {v.autopayAccountId && (
+              <Form.Item name="autopayMode">
+                <Segmented options={AUTOPAY_MODES.map((m) => ({ value: m, label: t(`autopay.modes.${m}`) }))} />
+              </Form.Item>
+            )}
+          </>
         )}
         <Row gutter={12}>
           <Col span={editing ? 14 : 24}>

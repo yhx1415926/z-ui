@@ -14,11 +14,13 @@ import { dashboardRoutes } from './routes/dashboard.ts';
 import { fxRoutes } from './routes/fx.ts';
 import { institutionRoutes } from './routes/institutions.ts';
 import { investRoutes } from './routes/invest.ts';
+import { notifyRoutes } from './routes/notify.ts';
 import { reminderRoutes } from './routes/reminders.ts';
 import { setupRoutes } from './routes/setup.ts';
 import { statementRoutes } from './routes/statements.ts';
 import { statsRoutes } from './routes/stats.ts';
 import { transactionRoutes } from './routes/transactions.ts';
+import { watchRoutes } from './routes/watch.ts';
 
 export interface AppOptions {
   /** Runtime-specific client IP lookup (socket address on Node, CF-Connecting-IP on Workers). */
@@ -43,6 +45,8 @@ export const PROTECTED_MOUNTS = {
   '/stats': statsRoutes,
   '/fx': fxRoutes,
   '/invest': investRoutes,
+  '/watch': watchRoutes,
+  '/notify': notifyRoutes,
 } as const;
 
 export function createApp(deps: Deps, opts: AppOptions) {

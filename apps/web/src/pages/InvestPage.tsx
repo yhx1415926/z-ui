@@ -1,13 +1,14 @@
 import { DeleteOutlined, EditOutlined, FormOutlined, PlusOutlined, SyncOutlined, WarningOutlined } from '@ant-design/icons';
-import { Alert, App, Button, Card, Col, Collapse, DatePicker, Empty, Form, Input, Modal, Popconfirm, Row, Segmented, Select, Space, Statistic, Table, Tag, Tooltip } from 'antd';
+import { Alert, App, Button, Card, Col, Collapse, DatePicker, Empty, Form, Input, Modal, Popconfirm, Row, Segmented, Select, Space, Statistic, Table, Tabs, Tag, Tooltip } from 'antd';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { decimalToMinor, todayIso, type AccountDto, type HoldingDto, type PriceSyncDto, type QuoteProblem, type TradeDto } from '@z-ui/shared';
 import { del, post, put } from '../api/client.ts';
 import { useAction, useInvest } from '../api/hooks.ts';
 import { MoneyInput, MoneyText } from '../components/Money.tsx';
+import { WatchPanel } from '../components/Watchlist.tsx';
 import { PageTop } from '../layouts/PanelLayout.tsx';
 import { useAccountOptions, useLocale, useLookups, useMoney } from '../lib/format.ts';
 
@@ -248,6 +249,19 @@ export function InvestPage() {
   const [renaming, setRenaming] = useState<{ symbol: string; suggestion?: string | null } | null>(null);
   // Symbols the last sync could not price (cleared when they get a price or are renamed).
   const [problems, setProblems] = useState<QuoteProblem[]>([]);
+  // ?tab=watch&symbol=AAPL: the watchlist tab and the chart shown.
+  const [params, setParams] = useSearchParams();
+  const tab = params.get('tab') === 'watch' ? 'watch' : 'holdings';
+  const watchSymbol = params.get('symbol');
+  const go = (next: { tab?: string; symbol?: string | null }) => {
+    const p = new URLSearchParams(params);
+    if (next.tab !== undefined) p.set('tab', next.tab);
+    if (next.symbol !== undefined) {
+      if (next.symbol) p.set('symbol', next.symbol);
+      else p.delete('symbol');
+    }
+    setParams(p, { replace: true });
+  };
 
   const sync = useAction(() => post<PriceSyncDto>('/invest/prices/sync'), { success: false, invalidate: ['invest', 'dashboard', 'accounts'] });
   const remove = useAction((id: string) => del(`/invest/trades/${id}`), { success: t('common.deleted') });
@@ -282,7 +296,11 @@ export function InvestPage() {
       key: 'symbol',
       render: (_: unknown, h: HoldingDto) => (
         <div>
-          <b>{h.symbol}</b>
+          <Tooltip title={t('watch.openChart')}>
+            <Button type="link" size="small" style={{ padding: 0, height: 'auto', fontWeight: 600 }} onClick={() => go({ tab: 'watch', symbol: h.symbol })}>
+              {h.symbol}
+            </Button>
+          </Tooltip>
           {h.name && <div className="muted" style={{ fontSize: 12 }}>{h.name}</div>}
         </div>
       ),
@@ -335,6 +353,7 @@ export function InvestPage() {
       <PageTop
         title={t('invest.title')}
         extra={
+          tab === 'holdings' && (
           <Space>
             <Button
               icon={<SyncOutlined spin={sync.isPending} />}
@@ -356,9 +375,21 @@ export function InvestPage() {
               {t('invest.addTrade')}
             </Button>
           </Space>
+          )
         }
       />
 
+      <Tabs
+        activeKey={tab}
+        onChange={(k) => go({ tab: k })}
+        items={[
+          { key: 'holdings', label: t('watch.tabHoldings') },
+          { key: 'watch', label: t('watch.tabWatch') },
+        ]}
+      />
+      {tab === 'watch' ? (
+        <WatchPanel symbol={watchSymbol} onSymbol={(s) => go({ symbol: s })} held={held} />
+      ) : (
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         {shownProblems.length > 0 && (
           <Alert
@@ -487,6 +518,7 @@ export function InvestPage() {
           />
         </Card>
       </Space>
+      )}
 
       <TradeModal open={modal.open} editing={modal.editing} onClose={() => setModal({ open: false, editing: null })} />
       <PriceModal

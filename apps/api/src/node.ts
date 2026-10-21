@@ -9,7 +9,8 @@ import { createApp } from './app.ts';
 import { DEFAULT_CONFIG } from './config/defaults.ts';
 import { DbConfigStore } from './config/store.ts';
 import { openLibsql } from './db/client.ts';
-import { readEnv } from './env.ts';
+import { readEnv, type Deps } from './env.ts';
+import { runDaily, runPriceWatch } from './lib/cron.ts';
 
 /** Local (Node) entry point: SQLite file via libsql, config file + git, optional built SPA. */
 
@@ -77,6 +78,27 @@ function spa(distDir: string): MiddlewareHandler {
   });
 }
 
+/**
+ * Stand-in for the Cloudflare Cron Triggers: the daily job (automatic repayments; no mails
+ * locally) once per local day, and price alerts every 30 minutes while US markets are open.
+ */
+function localCron(deps: Deps) {
+  let lastDay = '';
+  const tick = async () => {
+    const now = new Date();
+    const day = now.toDateString();
+    if (day !== lastDay) {
+      lastDay = day;
+      await runDaily(deps);
+    }
+    const h = now.getUTCHours();
+    if (now.getUTCDay() >= 1 && now.getUTCDay() <= 5 && h >= 13 && h <= 21) await runPriceWatch(deps);
+  };
+  const run = () => void tick().catch((e) => console.error('[cron]', e));
+  setTimeout(run, 5_000).unref();
+  setInterval(run, 30 * 60_000).unref();
+}
+
 export async function main() {
   loadDotEnv();
   const env = readEnv(process.env);
@@ -89,7 +111,9 @@ export async function main() {
   const staticHandler = production && existsSync(distDir) ? spa(distDir) : undefined;
   if (production && !staticHandler) console.warn('[api] apps/web/dist not found — run `npm run build` first');
 
-  const app = createApp({ db, env, config, now: Date.now }, { clientIp: clientIp(env.TRUST_PROXY), staticHandler });
+  const deps: Deps = { db, env, config, now: Date.now };
+  const app = createApp(deps, { clientIp: clientIp(env.TRUST_PROXY), staticHandler });
+  localCron(deps);
   const port = Number(process.env.PORT ?? 8787);
   // Listen on loopback only by default; expose deliberately (HOST=0.0.0.0) behind HTTPS.
   const hostname = process.env.HOST ?? '127.0.0.1';

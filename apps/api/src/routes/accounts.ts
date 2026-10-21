@@ -201,6 +201,11 @@ export const accountRoutes = new Hono<AppBindings>()
       fail(409, 'account has transactions, cards or stock trades — archive it instead', 'HAS_CHILDREN');
     }
     await runBatch(db, [
+      // Credit cards repaid automatically from this account stop doing so.
+      db
+        .update(cards)
+        .set({ autopayAccountId: null, autopayCurrency: null, autopayMode: null, autopaySince: null })
+        .where(and(eq(cards.userId, userId), eq(cards.autopayAccountId, cur.id))),
       db.delete(accountCurrencies).where(eq(accountCurrencies.accountId, cur.id)),
       db.delete(accounts).where(and(eq(accounts.id, cur.id), eq(accounts.userId, userId))),
     ]);

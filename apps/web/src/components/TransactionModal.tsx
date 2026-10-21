@@ -7,8 +7,8 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
 import { fromMinor, HIDDEN_TAG, type AccountDto, type TagDto, type TransactionDto, type TransactionType } from '@z-ui/shared';
 import { del, post, put } from '../api/client.ts';
-import { errorText, invalidateLedger } from '../api/hooks.ts';
-import { cardLabel, useAccountOptions, useDecimals, useLookups } from '../lib/format.ts';
+import { errorText, invalidateLedger, useConfig } from '../api/hooks.ts';
+import { cardLabel, useAccountOptions, useDecimals, useFxConvert, useLookups, useMoney } from '../lib/format.ts';
 import { CustomFieldInputs } from './CustomFields.tsx';
 import { MoneyInput } from './Money.tsx';
 
@@ -23,6 +23,10 @@ interface Values {
   toCurrency?: string;
   amount?: number | null;
   toAmount?: number | null;
+  /** Charged in another currency than the account's (e.g. USD from a CNY-only wallet). */
+  foreign?: boolean;
+  originalCurrency?: string;
+  originalAmount?: number | null;
   categoryId?: string | null;
   counterparty?: string;
   note?: string;
@@ -54,7 +58,17 @@ function initialValues(tx: TransactionDto | null | undefined, d: TxDefaults): Pa
       toAmount: out ? other.amount : tx.amount,
     };
   }
-  return { ...common, type: tx.type, accountId: tx.accountId, currency: tx.currency, cardId: tx.cardId, amount: tx.type === 'adjustment' ? tx.amount : Math.abs(tx.amount) };
+  return {
+    ...common,
+    type: tx.type,
+    accountId: tx.accountId,
+    currency: tx.currency,
+    cardId: tx.cardId,
+    amount: tx.type === 'adjustment' ? tx.amount : Math.abs(tx.amount),
+    foreign: !!tx.originalCurrency,
+    originalCurrency: tx.originalCurrency ?? undefined,
+    originalAmount: tx.originalAmount,
+  };
 }
 
 /** Currency picker shown only for multi-currency accounts. */
@@ -90,6 +104,9 @@ export function TransactionModal({
   const navigate = useNavigate();
   const decimals = useDecimals();
   const accountOptions = useAccountOptions();
+  const fx = useFxConvert();
+  const money = useMoney();
+  const { data: cfg } = useConfig();
 
   const type = Form.useWatch('type', form) ?? 'expense';
   const accountId = Form.useWatch('accountId', form);
@@ -100,6 +117,9 @@ export function TransactionModal({
   const currencyField = Form.useWatch('currency', form);
   const fromCurField = Form.useWatch('fromCurrency', form);
   const toCurField = Form.useWatch('toCurrency', form);
+  const foreignField = Form.useWatch('foreign', form);
+  const originalCurrency = Form.useWatch('originalCurrency', form);
+  const originalAmount = Form.useWatch('originalAmount', form);
 
   useEffect(() => {
     if (open) {
@@ -128,10 +148,30 @@ export function TransactionModal({
   const tagOptions = useMemo(() => L.tags.map((tg) => ({ value: tg.id, label: tg.name })), [L.tags]);
   const hiddenTag = L.tags.find((tg) => tg.name.toLowerCase() === HIDDEN_TAG);
 
-  const rate =
-    crossCurrency && amount && toAmount
-      ? (Number(fromMinor(toAmount, decimals(toCurrency!))) / Number(fromMinor(amount, decimals(fromCurrency!)))).toFixed(4)
-      : null;
+  const rateOf = (paid: number, from: string, got: number, to: string) => (Number(fromMinor(got, decimals(to))) / Number(fromMinor(paid, decimals(from)))).toFixed(4);
+  const rate = crossCurrency && amount && toAmount ? rateOf(amount, fromCurrency!, toAmount, toCurrency!) : null;
+  // Left blank, the received amount is converted at the current rate (shown as the placeholder).
+  const toEstimate = crossCurrency && amount && !toAmount ? fx(amount, fromCurrency!, toCurrency!) : null;
+
+  // Foreign-currency charge: the merchant's amount, and what the account actually paid.
+  const foreign = !!foreignField && (type === 'expense' || type === 'income') && !!originalCurrency && originalCurrency !== currency;
+  const foreignOn = !!foreignField && (type === 'expense' || type === 'income');
+  const paidEstimate = foreign && originalAmount && currency ? fx(originalAmount, originalCurrency!, currency) : null;
+  const foreignHint = !foreign
+    ? undefined
+    : amount && originalAmount
+      ? t('tx.rate', { from: originalCurrency, rate: rateOf(originalAmount, originalCurrency!, amount, currency!), to: currency })
+      : !originalAmount
+        ? t('tx.paidHint')
+        : paidEstimate !== null
+          ? t('tx.autoRate', { amount: money(paidEstimate, currency!) })
+          : t('tx.noRate', { from: originalCurrency, to: currency });
+  const currencyOptions = useMemo(() => (cfg?.currencies ?? []).map((c) => ({ value: c.code, label: c.code, title: c.name })), [cfg]);
+  const pickForeign = (on: boolean) => {
+    if (on && !form.getFieldValue('originalCurrency')) {
+      form.setFieldValue('originalCurrency', currency === 'USD' ? cfg?.currencies.find((c) => c.code !== 'USD')?.code : 'USD');
+    }
+  };
 
   const submit = async (v: Values) => {
     setBusy(true);
@@ -146,10 +186,20 @@ export function TransactionModal({
       const base = { occurredAt: v.occurredAt.format('YYYY-MM-DD'), note: v.note || null, counterparty: v.counterparty || null, tagIds, extra: v.extra ?? {} };
       const body =
         v.type === 'transfer'
-          ? { ...base, type: 'transfer', fromAccountId: v.fromAccountId, fromCurrency, toAccountId: v.toAccountId, toCurrency, amount: v.amount, toAmount: crossCurrency ? v.toAmount : null }
+          ? { ...base, type: 'transfer', fromAccountId: v.fromAccountId, fromCurrency, toAccountId: v.toAccountId, toCurrency, amount: v.amount, toAmount: crossCurrency ? (v.toAmount ?? null) : null }
           : v.type === 'adjustment'
             ? { ...base, type: 'adjustment', accountId: v.accountId, currency, amount: v.amount }
-            : { ...base, type: v.type, accountId: v.accountId, currency, cardId: v.cardId || null, categoryId: v.categoryId || null, amount: v.amount };
+            : {
+                ...base,
+                type: v.type,
+                accountId: v.accountId,
+                currency,
+                cardId: v.cardId || null,
+                categoryId: v.categoryId || null,
+                amount: v.amount ?? null,
+                originalCurrency: foreign ? originalCurrency : null,
+                originalAmount: foreign ? v.originalAmount : null,
+              };
       if (editing) await put(`/transactions/${editing.id}`, body);
       else await post('/transactions', body);
       await invalidateLedger(qc);
@@ -263,8 +313,20 @@ export function TransactionModal({
               <MoneyInput currency={fromCurrency ?? '—'} autoFocus />
             </Form.Item>
             {crossCurrency && (
-              <Form.Item name="toAmount" label={t('tx.toAmount')} rules={[{ required: true }]} extra={rate ? t('tx.rate', { from: fromCurrency, rate, to: toCurrency }) : undefined}>
-                <MoneyInput currency={toCurrency!} />
+              <Form.Item
+                name="toAmount"
+                label={t('tx.toAmount')}
+                extra={
+                  rate
+                    ? t('tx.rate', { from: fromCurrency, rate, to: toCurrency })
+                    : !amount
+                      ? t('tx.toAmountHint')
+                      : toEstimate !== null
+                        ? t('tx.autoRate', { amount: money(toEstimate, toCurrency!) })
+                        : t('tx.noRate', { from: fromCurrency, to: toCurrency })
+                }
+              >
+                <MoneyInput currency={toCurrency!} placeholder={toEstimate !== null ? fromMinor(toEstimate, decimals(toCurrency!)) : undefined} />
               </Form.Item>
             )}
           </>
@@ -280,13 +342,40 @@ export function TransactionModal({
                 }}
               />
             </Form.Item>
-            <Form.Item label={t('common.amount')} required htmlFor="amount" extra={type === 'adjustment' ? t('tx.adjustmentHint') : undefined}>
+            {type !== 'adjustment' && (
+              <Form.Item name="foreign" valuePropName="checked" style={{ marginBottom: 8 }}>
+                <Checkbox onChange={(e) => pickForeign(e.target.checked)}>{t('tx.foreign')}</Checkbox>
+              </Form.Item>
+            )}
+            {foreignOn && (
+              <Form.Item label={t('tx.originalAmount')} required htmlFor="originalAmount">
+                <Space.Compact block>
+                  <Form.Item name="originalCurrency" noStyle rules={[{ required: true }]}>
+                    <Select style={{ width: 96, flex: '0 0 auto' }} options={currencyOptions} showSearch={{ optionFilterProp: 'label' }} />
+                  </Form.Item>
+                  <Form.Item name="originalAmount" noStyle rules={[{ required: true }]}>
+                    <MoneyInput currency={originalCurrency ?? '—'} autoFocus />
+                  </Form.Item>
+                </Space.Compact>
+              </Form.Item>
+            )}
+            <Form.Item
+              label={foreign ? t('tx.paidAmount', { currency }) : t('common.amount')}
+              required={!foreign}
+              htmlFor="amount"
+              extra={type === 'adjustment' ? t('tx.adjustmentHint') : foreignHint}
+            >
               <Space.Compact block>
                 <Form.Item name="currency" noStyle>
                   <CurrencyPick account={account} />
                 </Form.Item>
-                <Form.Item name="amount" noStyle rules={[{ required: true }]}>
-                  <MoneyInput currency={currency ?? '—'} allowNegative={type === 'adjustment'} autoFocus />
+                <Form.Item name="amount" noStyle rules={[{ required: !foreign }]}>
+                  <MoneyInput
+                    currency={currency ?? '—'}
+                    allowNegative={type === 'adjustment'}
+                    autoFocus={!foreignOn}
+                    placeholder={paidEstimate !== null ? fromMinor(paidEstimate, decimals(currency!)) : undefined}
+                  />
                 </Form.Item>
               </Space.Compact>
             </Form.Item>

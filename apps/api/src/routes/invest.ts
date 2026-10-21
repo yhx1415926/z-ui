@@ -18,12 +18,13 @@ import type { DB } from '../db/client.ts';
 import { securities, trades, transactions, transactionTags } from '../db/schema.ts';
 import type { AppBindings } from '../env.ts';
 import { recalcOps } from '../lib/balances.ts';
-import { chunkIds, chunkRows, inChunks } from '../lib/chunks.ts';
+import { chunkIds, inChunks } from '../lib/chunks.ts';
 import { body, fail, notFound } from '../lib/http.ts';
 import { newId } from '../lib/id.ts';
 import { heldMicros, positions, toHoldings, type TradeRow } from '../lib/invest.ts';
 import { accountCurrency, currenciesOf, ownAccount, runBatch } from '../lib/ledger.ts';
 import { fetchQuotes, FetchBudget } from '../lib/markets.ts';
+import { alertTriggerOps, storeQuoteOps } from '../lib/prices.ts';
 import { insertLegOps } from './transactions.ts';
 
 type C = Context<AppBindings>;
@@ -231,25 +232,9 @@ export const investRoutes = new Hono<AppBindings>()
     const batch = await fetchQuotes(f, symbols, { finnhubKey: env.FINNHUB_API_KEY, budget: new FetchBudget(FETCH_BUDGET) });
     const t = now();
     const ok = batch.quotes;
-    const rows = ok.map((q) => ({ symbol: q.symbol, name: q.name, currency: 'USD', priceMicros: toMicros(q.price.toFixed(6)), priceAt: Math.round(q.at), source: q.source, updatedAt: t }));
-    await runBatch(
-      db,
-      chunkRows(rows).map((part) =>
-        db
-          .insert(securities)
-          .values(part)
-          .onConflictDoUpdate({
-            target: securities.symbol,
-            set: {
-              name: sql`coalesce(excluded.name, ${securities.name})`,
-              priceMicros: sql`excluded.price_micros`,
-              priceAt: sql`excluded.price_at`,
-              source: sql`excluded.source`,
-              updatedAt: sql`excluded.updated_at`,
-            },
-          }),
-      ),
-    );
+    // New prices may reach price alerts (their email goes out with the next notification run).
+    const alerts = await alertTriggerOps(db, ok, t);
+    await runBatch(db, [...storeQuoteOps(db, ok, t), ...alerts.ops]);
     const result: PriceSyncDto = {
       ...(await investDto(db, userId)),
       updated: ok.length,

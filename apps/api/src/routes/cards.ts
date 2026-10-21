@@ -22,7 +22,8 @@ import { decryptField, encryptField } from '../lib/crypto.ts';
 import { inChunks } from '../lib/chunks.ts';
 import { body, fail } from '../lib/http.ts';
 import { newId } from '../lib/id.ts';
-import { applyExtra, defined, ownAccount, ownCard, runBatch } from '../lib/ledger.ts';
+import { accountCurrency, applyExtra, defined, ownAccount, ownCard, runBatch } from '../lib/ledger.ts';
+import { today } from './bills.ts';
 
 type Row = typeof cards.$inferSelect;
 
@@ -98,6 +99,28 @@ async function checkParent(db: DB, userId: string, parentId: string | null | und
   return parent.id;
 }
 
+type AutopayInput = { autopayAccountId?: string | null; autopayCurrency?: string | null; autopayMode?: 'full' | 'min' | null };
+
+/**
+ * Automatic repayment of a credit card: the account the bank debits on the due date. Only
+ * statements due from the day it is set up (autopaySince) are repaid automatically, so turning it
+ * on never pays old, already overdue statements behind your back.
+ */
+async function autopayFields(deps: Deps, userId: string, card: { funding: string; accountId: string }, input: AutopayInput, cur: Row | null) {
+  const accountId = input.autopayAccountId !== undefined ? input.autopayAccountId : (cur?.autopayAccountId ?? null);
+  if (card.funding !== 'credit' || !accountId) return { autopayAccountId: null, autopayCurrency: null, autopayMode: null, autopaySince: null };
+  if (accountId === card.accountId) fail(400, 'repay from another account than the card’s own', 'AUTOPAY_SAME_ACCOUNT');
+  const account = await ownAccount(deps.db, userId, accountId);
+  const requested = input.autopayCurrency !== undefined ? input.autopayCurrency : (cur?.autopayCurrency ?? null);
+  return {
+    autopayAccountId: account.id,
+    // null: the statement's currency when the account holds it, else the account's primary one.
+    autopayCurrency: requested ? await accountCurrency(deps.db, account, requested) : null,
+    autopayMode: input.autopayMode ?? cur?.autopayMode ?? 'full',
+    autopaySince: cur?.autopayAccountId === account.id && cur.autopaySince ? cur.autopaySince : today(deps),
+  };
+}
+
 export const cardRoutes = new Hono<AppBindings>()
   .get('/', async (c) => {
     const accountId = c.req.query('accountId');
@@ -117,6 +140,7 @@ export const cardRoutes = new Hono<AppBindings>()
     const parentCardId = input.form === 'virtual' ? await checkParent(db, userId, input.parentCardId) : null;
     const t = now();
     const fromPan = input.pan?.trim() ? await panFields(c.var.deps, id, input.pan) : null;
+    const autopay = await autopayFields(c.var.deps, userId, input, input, null);
     const row: Row = {
       id,
       userId,
@@ -141,6 +165,7 @@ export const cardRoutes = new Hono<AppBindings>()
       holderName: input.holderName ?? null,
       statementDay: input.statementDay ?? null,
       dueDay: input.dueDay ?? null,
+      ...autopay,
       theme: input.theme,
       note: input.note ?? null,
       extra: applyExtra(c.var.deps, 'card', {}, input.extra),
@@ -159,7 +184,14 @@ export const cardRoutes = new Hono<AppBindings>()
     const userId = c.var.user.id;
     const cur = await ownCard(db, userId, c.req.param('id'));
     if (input.accountId) await ownAccount(db, userId, input.accountId);
-    const { pan, extra, last4, parentCardId, binInfo, ...fields } = input;
+    const { pan, extra, last4, parentCardId, binInfo, autopayAccountId, autopayCurrency, autopayMode, ...fields } = input;
+    const autopay = await autopayFields(
+      c.var.deps,
+      userId,
+      { funding: input.funding ?? cur.funding, accountId: input.accountId ?? cur.accountId },
+      { autopayAccountId, autopayCurrency, autopayMode },
+      cur,
+    );
     const form = input.form ?? cur.form;
     // pan: string → replace; null/"" → forget the stored number (keep last 4); undefined → unchanged.
     const panUpdate =
@@ -185,6 +217,7 @@ export const cardRoutes = new Hono<AppBindings>()
         ...parentUpdate,
         ...binInfoUpdate,
         ...limitUpdate,
+        ...autopay,
         ...(extra !== undefined && { extra: applyExtra(c.var.deps, 'card', cur.extra, extra) }),
         updatedAt: now(),
       })

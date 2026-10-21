@@ -4,12 +4,12 @@ import dayjs, { type Dayjs } from 'dayjs';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { PAST_POLICIES, RECURRENCE_FREQS, todayIso, type BillDto, type BillOccurrenceDto, type PastPolicy } from '@z-ui/shared';
+import { fromMinor, PAST_POLICIES, RECURRENCE_FREQS, todayIso, type BillDto, type BillOccurrenceDto, type PastPolicy } from '@z-ui/shared';
 import { del, patch, post } from '../api/client.ts';
 import { useAction, useBills, useConfig, useOccurrences } from '../api/hooks.ts';
 import { MoneyInput, MoneyText } from '../components/Money.tsx';
 import { PageTop } from '../layouts/PanelLayout.tsx';
-import { cardLabel, useAccountOptions, useLookups } from '../lib/format.ts';
+import { cardLabel, useAccountOptions, useDecimals, useFxConvert, useLookups, useMoney } from '../lib/format.ts';
 
 interface BillForm extends Omit<Partial<BillDto>, 'startDate' | 'endDate'> {
   startDate?: Dayjs;
@@ -198,6 +198,16 @@ function PayModal({ occ, bill, onClose }: { occ: BillOccurrenceDto | null; bill:
   const account = accountId ? L.acc.get(accountId) : undefined;
   const held = account?.currencies.map((c) => c.currency) ?? [];
   const currency = curField ?? (occ && held.includes(occ.currency) ? occ.currency : account?.currency);
+  // Paid in another currency (a USD bill from a CNY wallet): the charged amount may be left blank.
+  const cross = !!occ && !!currency && currency !== occ.currency;
+  const fx = useFxConvert();
+  const money = useMoney();
+  const decimals = useDecimals();
+  const amount = Form.useWatch('amount', form);
+  const estimate = cross ? fx(occ.amount, occ.currency, currency) : null;
+  useEffect(() => {
+    if (occ) form.setFieldValue('amount', cross ? null : occ.amount);
+  }, [cross, occ, form]);
   useEffect(() => {
     if (!occ) return;
     form.resetFields();
@@ -209,8 +219,8 @@ function PayModal({ occ, bill, onClose }: { occ: BillOccurrenceDto | null; bill:
       occurredAt: dayjs(occ.dueDate < today ? occ.dueDate : today),
     });
   }, [occ, bill, form, L.card]);
-  const pay = useAction(async (v: { accountId: string; cardId?: string | null; amount: number; occurredAt: Dayjs; note?: string }) => {
-    await post(`/bills/occurrences/${occ!.id}/pay`, { ...v, currency, cardId: v.cardId ?? null, occurredAt: v.occurredAt.format('YYYY-MM-DD') });
+  const pay = useAction(async (v: { accountId: string; cardId?: string | null; amount?: number | null; occurredAt: Dayjs; note?: string }) => {
+    await post(`/bills/occurrences/${occ!.id}/pay`, { ...v, amount: v.amount ?? null, currency, cardId: v.cardId ?? null, occurredAt: v.occurredAt.format('YYYY-MM-DD') });
     onClose();
   });
   return (
@@ -230,15 +240,26 @@ function PayModal({ occ, bill, onClose }: { occ: BillOccurrenceDto | null; bill:
         <Form.Item name="accountId" label={t('tx.account')} rules={[{ required: true }]}>
           <Select options={accountOptions} onChange={() => (form.setFieldValue('cardId', null), form.setFieldValue('currency', undefined))} />
         </Form.Item>
-        <Form.Item label={t('common.amount')} required htmlFor="amount">
+        <Form.Item
+          label={cross ? t('tx.paidAmount', { currency }) : t('common.amount')}
+          required={!cross}
+          htmlFor="amount"
+          extra={
+            cross && occ
+              ? `${t('bill.billed', { amount: money(occ.amount, occ.currency) })} · ${
+                  amount ? '' : estimate !== null ? t('tx.autoRate', { amount: money(estimate, currency!) }) : t('tx.noRate', { from: occ.currency, to: currency })
+                }`
+              : undefined
+          }
+        >
           <Space.Compact block>
             {held.length > 1 && (
               <Form.Item name="currency" noStyle>
                 <Select style={{ width: 96 }} value={currency} options={held.map((c) => ({ value: c, label: c }))} />
               </Form.Item>
             )}
-            <Form.Item name="amount" noStyle rules={[{ required: true }]}>
-              <MoneyInput currency={currency ?? occ?.currency ?? '—'} />
+            <Form.Item name="amount" noStyle rules={[{ required: !cross }]}>
+              <MoneyInput currency={currency ?? occ?.currency ?? '—'} placeholder={estimate !== null ? fromMinor(estimate, decimals(currency!)) : undefined} />
             </Form.Item>
           </Space.Compact>
         </Form.Item>

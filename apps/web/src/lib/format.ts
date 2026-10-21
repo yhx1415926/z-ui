@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BRAND_META, currencyDecimals, formatMoney, type AccountDto, type CardDto, type FormatMoneyOptions } from '@z-ui/shared';
-import { useAccounts, useCards, useCategories, useConfig, useInstitutions, useTags } from '../api/hooks.ts';
+import { useAccounts, useCards, useCategories, useConfig, useFx, useInstitutions, useTags } from '../api/hooks.ts';
 
 export function useLocale() {
   const { i18n } = useTranslation();
@@ -11,6 +11,26 @@ export function useLocale() {
 export function useDecimals() {
   const { data: cfg } = useConfig();
   return useCallback((currency: string) => currencyDecimals(cfg ?? { currencies: [] }, currency), [cfg]);
+}
+
+/**
+ * Convert minor units between currencies with the last synced FX rates (USD based), for the
+ * "left blank → current rate" estimates. null when a rate is missing.
+ */
+export function useFxConvert() {
+  const { data } = useFx();
+  const decimals = useDecimals();
+  return useCallback(
+    (minor: number, from: string, to: string): number | null => {
+      if (from === to) return minor;
+      const perUsd = (c: string) => (c === 'USD' ? 1 : data?.rates.find((r) => r.currency === c)?.perUsd);
+      const a = perUsd(from);
+      const b = perUsd(to);
+      if (!a || !b) return null;
+      return Math.round((minor / 10 ** decimals(from) / a) * b * 10 ** decimals(to));
+    },
+    [data, decimals],
+  );
 }
 
 /** (minor, currency) → localized string with the currency's own decimals and configured symbol. */

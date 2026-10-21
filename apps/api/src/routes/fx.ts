@@ -1,9 +1,9 @@
 import { asc, eq, max, ne, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { currencyCodeSchema, fxRateSchema, type FxDto } from '@z-ui/shared';
+import { currencyCodeSchema, currencyDecimals, fxRateSchema, type FxDto } from '@z-ui/shared';
 import type { DB } from '../db/client.ts';
 import { fxRates } from '../db/schema.ts';
-import type { AppBindings } from '../env.ts';
+import type { AppBindings, Deps } from '../env.ts';
 import { chunkRows } from '../lib/chunks.ts';
 import { body, fail } from '../lib/http.ts';
 import { fetchFxRates } from '../lib/markets.ts';
@@ -26,6 +26,21 @@ export function convert(amount: number, from: string, to: string, perUsd: Map<st
   if (!a || !b) return null;
   const major = amount / 10 ** decimals(from);
   return Math.round((major / a) * b * 10 ** decimals(to));
+}
+
+/** Units per USD of every stored currency. */
+export async function ratesMap(db: DB): Promise<Map<string, number>> {
+  return new Map((await db.select({ currency: fxRates.currency, perUsd: fxRates.perUsd }).from(fxRates)).map((r) => [r.currency, r.perUsd]));
+}
+
+/**
+ * Convert with the last synced rates, for amounts the user left blank (a foreign-currency charge
+ * paid from another currency). Without a rate the request fails with `code`, asking for the amount.
+ */
+export async function convertNow(deps: Deps, amount: number, from: string, to: string, code: string, rates?: Map<string, number>): Promise<number> {
+  const out = convert(amount, from, to, rates ?? (await ratesMap(deps.db)), (c) => currencyDecimals(deps.config.get(), c));
+  if (out === null || out <= 0) fail(400, `no ${from}/${to} exchange rate — sync the rates or enter the ${to} amount`, code);
+  return out;
 }
 
 /** Exchange rates, synced on demand (button) from a public API, or typed in by hand. */

@@ -8,7 +8,10 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const problems = [];
 
 const wrangler = readFileSync(resolve(ROOT, 'wrangler.jsonc'), 'utf8');
-if (wrangler.includes('00000000-0000-0000-0000-000000000000')) problems.push('wrangler.jsonc: set d1_databases[0].database_id (npx wrangler d1 create z-ui)');
+const dbId = /"database_id"\s*:\s*"([^"]*)"/.exec(wrangler)?.[1] ?? '';
+if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(dbId) || /^[0-]+$/.test(dbId)) {
+  problems.push(`wrangler.jsonc: database_id "${dbId}" is not your D1 database id — find it with: npx wrangler d1 list`);
+}
 if (wrangler.includes('z.example.com')) problems.push('wrangler.jsonc: replace z.example.com with your domain (routes, RP_ID, ORIGINS)');
 
 if (problems.length) {
