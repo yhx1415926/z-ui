@@ -1,6 +1,6 @@
 # Z-UI 个人账本
 
-自用的记账网站，管理多国家、多银行、多账户、多卡片的资金。界面风格与动画参考 [3x-ui](https://github.com/MHSanaei/3x-ui)，前端用 React 19 + Ant Design 6，有暗色、极暗、亮色三套主题。后端用 Hono：同一份代码既能在 Mac 本地运行，也能部署到 **Cloudflare Workers + D1（免费版）**。
+自用的记账网站，管理多国家、多银行、多账户、多卡片的资金。界面风格与动画参考 [3x-ui](https://github.com/MHSanaei/3x-ui)，前端用 React 19 + Ant Design 6，有暗色、极暗、亮色三套主题。后端用 Hono：同一份代码既能在 Mac 本地运行，也能部署到 **Cloudflare Workers + D1**。
 
 ## 功能
 
@@ -8,16 +8,16 @@
   - 主力登录方式是 **Passkey**（指纹 / Face ID）；备用方式是 **密码 + Google Authenticator 验证码**，另有一次性恢复码。
   - 查看完整卡号、修改安全设置或全局设置之前，需要在 5 分钟内再验证一次。
   - 连续输错会被锁定；登录记录写入审计日志。
-- **资金结构**：银行/机构（按国家分组，也可以选「🌐 全球 / 不限国家」）→ 账户 → 卡片。
-  - 一个账户可以有**多个币种**，每个币种可以单独设置是否「计入总账」；余额为 0 的币种自动隐藏（股票扣款账户的 USD 除外）。
+- **资金结构**：银行/机构（按国家分组）→ 账户 → 卡片。
+  - 一个账户可以有**多个币种**，每个币种可以单独设置是否「计入总账」；余额为 0 的币种自动隐藏（股票扣款账户除外）。
   - 每个币种可以设置**余额日期**：填的是那一天结束时的余额，当天及之前的流水视为已包含、不再计入，之后的流水才会增减余额。不填日期则所有流水都计入。
 - **流水**：带 `hidden` 标签的琐碎消费默认不在流水页显示（可以打开「显示 hidden」），统计照常计入；股票买卖的资金记录不在流水页显示，在账户详情和统计页查看。
   - 一个账户可以绑定多张卡；支持**虚拟卡**（挂在实体卡下，可设消费限额和锁定商户）。
 - **Stripe 风格卡面**
   - 卡面可翻转；支持银联 16–19 位（不做 Luhn 校验）和 Amex 15 位；卡号输完才校验；有效期按 `MM / YY` 输入。
-  - 完整卡号用 AES-256-GCM **加密**保存；列表只显示后四位，**不保存 CVV**。
+  - 完整卡号用 AES-256-GCM **加密**保存；列表只显示后四位。
   - 只保存卡号前 6 位和后 4 位用于显示与识别卡组织。
-  - 可以保存**安全码**（CVV/CVN 3–4 位，或 6 位 PIN，不做区分），同样加密保存。列表和卡片数据里都不带它；只有登录后在卡片详情里把卡片翻到背面时才向服务器取回（需要 5 分钟内验证过身份，会记入安全日志），显示在背面签名条上，翻回正面或 30 秒后清除。
+  - 可以保存**安全码**（CVV/CVN 3–4 位，或 4-6 位 PIN），同样加密保存。列表和卡片数据里都不带它；只有登录后在卡片详情里把卡片翻到背面时才向服务器取回（需要 5 分钟内验证过身份，会记入安全日志），显示在背面签名条上，翻回正面或 30 秒后清除。
 - **流水**：收入 / 支出 / 转账 / 余额调整。
   - 跨币种转账（包括同一账户内换汇）会记录实际到账金额；到账金额留空则按当前汇率自动换算。
   - 转账可以填**手续费**（同币种、跨币种都可以）：从转出账户另外扣除，单独记为一笔「转账手续费」支出（自动归到「银行手续费」分类），计入统计；删除或修改转账时一起处理。
@@ -56,10 +56,10 @@
 
 ```bash
 brew install fnm && fnm install 24 && fnm use 24
-cd /Volumes/ubuntu-share/z-ui     # 或者你放项目的目录
+cd ~/z-ui     # 你放项目的目录
 
-# 这个目录和 Linux 共享：node_modules 里有按平台编译的二进制，换平台后必须重新安装
-rm -rf node_modules
+# node_modules 里有按系统编译的二进制，换系统后必须重新安装
+# rm -rf node_modules
 npm install
 
 # 首次运行时，如果没有 .env 会自动生成（含随机密钥）。请把其中的 APP_ENC_KEY 另外备份。
@@ -91,7 +91,7 @@ npm run dev               # 打开 http://localhost:5173
 - 只有 `/api/*` 会运行 Worker 代码（见 `wrangler.jsonc` 中的 `run_worker_first`）。
 - 数据存放在 **D1**。
 
-前提是你的域名已经托管在 Cloudflare 上。下文以 `z.example.com` 为例。
+前提是你的域名已经托管在 Cloudflare 上。下文以 `z-ui.example.com` 为例。
 
 ### 1. 创建数据库，填写 `wrangler.jsonc`
 
@@ -104,7 +104,7 @@ npx wrangler d1 create z-ui        # 记下输出中的 database_id
 
 - `d1_databases[0].database_id`：填入上一步得到的 id。
 - `routes[0].pattern`：改成你的子域名。Cloudflare 会自动创建 DNS 记录和证书。
-- `vars.RP_ID` 和 `vars.ORIGINS`：改成同一个域名，分别写 `z.example.com` 和 `https://z.example.com`。
+- `vars.RP_ID` 和 `vars.ORIGINS`：改成同一个域名，分别写 `z-ui.example.com` 和 `https://z-ui.example.com`。
 
 ### 2. 设置密钥（不写进任何文件）
 
@@ -140,7 +140,7 @@ npm run cf:deploy
 **方法 A：Cloudflare Access（推荐，Zero Trust 免费版最多 50 人）**
 
 1. 打开 Cloudflare 控制台 → Zero Trust → Access → Applications → Add an application → **Self-hosted**。
-2. Domain 填 `z.example.com`，Session duration 可以设为 1 个月。
+2. Domain 填 `z-ui.example.com`，Session duration 可以设为 1 个月。
 3. Policy 选 Allow，Include → Emails 填你自己的邮箱；登录方式用 One-time PIN（邮箱验证码），不需要额外配置。
 
 这样配置后，未通过 Access 的请求会**在 Cloudflare 边缘被拦下**，根本不会运行 Worker，也就不消耗额度；爬虫连登录页都看不到。你自己的流程是：先通过 Access（每月一次邮箱验证码），再用 Passkey 登录。
@@ -186,13 +186,6 @@ npm run cf:deploy
 - D1 自带 Time Travel，可以把数据库恢复到过去 7 天内的任意时间点（免费版）。备份文件就是一份完整的 SQL，可以用 `wrangler d1 execute --file` 导回。
 - 如果在 Mac 上用的是项目的副本，从共享目录同步代码时，**不要覆盖**你自己的 `wrangler.jsonc`、`.env`、`.dev.vars` 和 `data/`：
 
-```bash
-rsync -a --delete --exclude node_modules --exclude .env --exclude .dev.vars --exclude data --exclude wrangler.jsonc --exclude .wrangler \
-  --exclude 'd1-backup-*.sql' --exclude .DS_Store /Volumes/ubuntu-share/z-ui/ ~/Desktop/z-ui-2/
-```
-
-`--delete` 会把共享目录里已经删除的文件（例如不再使用的 BIN 库）也从副本里删掉；上面排除的文件不受影响。
-
 ### 邮件通知与定时任务
 
 `wrangler.jsonc` 里有两个定时任务（免费版可用）：每天 01:00 UTC（北京时间 09:00）执行自动还款和邮件通知；美股交易时段每 30 分钟检查价格提醒。
@@ -202,9 +195,7 @@ rsync -a --delete --exclude node_modules --exclude .env --exclude .dev.vars --ex
 1. Cloudflare 控制台 → 你的域名 → 电子邮件 → 电子邮件路由（Email Routing），启用。
 2. 在「目标地址（Destination addresses）」添加你的私人邮箱，点验证邮件里的链接。
 3. 把 `wrangler.jsonc` 里 `send_email` 那三行前面的 `//` 去掉，重新 `npm run cf:deploy`。
-4. 打开网站的「邮件通知」页，填发件地址（你域名下任意地址，例如 `z-ui@你的域名`）和收件地址，打开开关并保存，点「发送测试邮件」。
-
-> 上面的 `rsync` 不会覆盖副本里的 `wrangler.jsonc`。请把共享目录 `wrangler.jsonc` 中新增的 `triggers` 和 `send_email` 两段手动加到你部署用的那份里。
+4. 打开网站的「邮件通知」页，填发件地址（你域名下任意地址，例如 `z-ui@你的域名`）和收件地址，打开开关并保存，点「发送测试邮件」
 
 ### 把本地数据搬到 Cloudflare（可选）
 
@@ -268,10 +259,6 @@ npm run lint
   6. 查看统计（含多币种折合），hidden 标签，信用额度，更换头像。
   7. 检查主题切换和手机布局。
 
-> 如果机器上有 HTTP 代理（例如 Clash 的 `127.0.0.1:7890`），请设置 `NO_PROXY=localhost,127.0.0.1`。Playwright 配置里已经自动处理。
+## 致谢
 
-## 后续可做
-
-- 加密货币：按平台记录，以 USD 统计。
-- 汇损：按每笔跨币种转账，以中间价计算换汇损失。
-- 定时同步汇率和股价（Cron Triggers，免费版可用），目前为手动同步。
+本项目由 gpt6-astra, claude-opus5.5, grok4.7, Gemini-4-argon 分别提交成品, 最终采纳 opus5.5 版本
